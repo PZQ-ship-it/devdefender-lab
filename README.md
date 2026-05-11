@@ -59,6 +59,15 @@ $env:GH_TOKEN="github_pat_..."
 .\scripts\publish_github.ps1
 ```
 
+## Third-Party Bring-Up
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\third_party_smoke.py --list
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\third_party_smoke.py --phase 1
+```
+
+Local upstream clones are stored in `third_party/src/` and are gitignored. Phase 1 results are summarized in `third_party/PHASE1_STATUS.md`.
+
 ## Architecture Notes
 
 - `embedded` graph backend is the default because Docker/Memgraph is intentionally out of scope for this first local run.

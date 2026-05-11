@@ -10,4 +10,7 @@ node_modules/
 dist/
 .slidev/
 artifacts/
+third_party/src/
+third_party/reports/
+third_party/.npm-cache/
 *.log

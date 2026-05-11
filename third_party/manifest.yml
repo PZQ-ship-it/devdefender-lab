@@ -1,0 +1,111 @@
+libraries:
+  - name: langgraph
+    phase: 1
+    category: orchestration
+    repo: https://github.com/langchain-ai/langgraph.git
+    smoke:
+      kind: python_import
+      module: langgraph
+
+  - name: tree-sitter
+    phase: 1
+    category: code-graph
+    repo: https://github.com/tree-sitter/tree-sitter.git
+    smoke:
+      kind: command
+      command: node --version
+
+  - name: tree-sitter-python
+    phase: 1
+    category: code-graph
+    repo: https://github.com/tree-sitter/tree-sitter-python.git
+    smoke:
+      kind: python_import
+      module: tree_sitter_python
+
+  - name: model-context-protocol-python-sdk
+    phase: 1
+    category: tool-protocol
+    repo: https://github.com/modelcontextprotocol/python-sdk.git
+    smoke:
+      kind: python_import
+      module: mcp
+      optional_package: mcp
+
+  - name: slidev
+    phase: 1
+    category: presenter
+    repo: https://github.com/slidevjs/slidev.git
+    smoke:
+      kind: npm_exec
+      command: npx slidev --version
+
+  - name: mermaid-cli
+    phase: 1
+    category: diagram
+    repo: https://github.com/mermaid-js/mermaid-cli.git
+    smoke:
+      kind: command
+      command: node src/cli.js --version
+
+  - name: aider
+    phase: 1
+    category: refiner
+    repo: https://github.com/Aider-AI/aider.git
+    smoke:
+      kind: command
+      command: python -m aider.main --version
+      optional_package: aider-chat
+
+  - name: memgraph
+    phase: 2
+    category: graph-database
+    repo: https://github.com/memgraph/memgraph.git
+    requires:
+      - docker-or-linux-build-toolchain
+    smoke:
+      kind: blocked
+      reason: Docker is not installed on this Windows host.
+
+  - name: livekit-agents
+    phase: 2
+    category: avatar-audio
+    repo: https://github.com/livekit/agents.git
+    requires:
+      - livekit-api-credentials
+    smoke:
+      kind: python_import
+      module: livekit.agents
+      optional_package: livekit-agents
+
+  - name: whisperx
+    phase: 2
+    category: transcription
+    repo: https://github.com/m-bain/whisperX.git
+    requires:
+      - pytorch
+      - ffmpeg
+    smoke:
+      kind: python_import
+      module: whisperx
+      optional_package: whisperx
+
+  - name: puppeteer
+    phase: 3
+    category: meeting-automation
+    repo: https://github.com/puppeteer/puppeteer.git
+    requires:
+      - chromium-download
+    smoke:
+      kind: npm_exec
+      command: node -e "import('puppeteer').then(() => console.log('puppeteer import ok'))"
+
+  - name: xvfb
+    phase: 3
+    category: virtual-display
+    repo: https://gitlab.freedesktop.org/xorg/xserver.git
+    requires:
+      - linux-host
+    smoke:
+      kind: blocked
+      reason: Xvfb is a Linux virtual display server; current host is Windows without Docker.
