@@ -1,0 +1,15 @@
+name: devdefender-lab
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - langgraph>=0.2.74
+      - networkx>=3.2
+      - openai>=1.99.0
+      - pydantic>=2.8
+      - python-dotenv>=1.0
+      - pytest>=8.2
+      - tree-sitter>=0.23
+      - tree-sitter-python>=0.23

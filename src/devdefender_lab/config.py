@@ -1,0 +1,28 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+
+
+class Settings(BaseModel):
+    openai_api_key: str | None = Field(default=None)
+    openai_model: str = Field(default="gpt-5.5")
+    llm_mode: str = Field(default="openai")
+    graph_backend: str = Field(default="embedded")
+    artifact_dir: Path = Field(default=Path("artifacts"))
+    slidev_port: int = Field(default=3030)
+
+
+def load_settings() -> Settings:
+    load_dotenv()
+    return Settings(
+        openai_api_key=os.getenv("OPENAI_API_KEY"),
+        openai_model=os.getenv("OPENAI_MODEL", "gpt-5.5"),
+        llm_mode=os.getenv("DEVDEFENDER_LLM_MODE", "openai"),
+        graph_backend=os.getenv("DEVDEFENDER_GRAPH_BACKEND", "embedded"),
+        artifact_dir=Path(os.getenv("DEVDEFENDER_ARTIFACT_DIR", "artifacts")),
+        slidev_port=int(os.getenv("DEVDEFENDER_SLIDEV_PORT", "3030")),
+    )

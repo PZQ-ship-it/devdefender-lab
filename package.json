@@ -1,0 +1,14 @@
+{
+  "name": "devdefender-lab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "slides": "slidev deck/slides.md --host 127.0.0.1 --port 3030",
+    "slides:build": "slidev build deck/slides.md --base /devdefender-lab/"
+  },
+  "devDependencies": {
+    "@slidev/cli": "^52.2.2",
+    "@slidev/theme-default": "^0.25.0"
+  }
+}
