@@ -13,6 +13,15 @@ Copy-Item .env.example .env
 
 Set `OPENAI_API_KEY` in `.env` or in your shell. `OPENAI_MODEL` defaults to `gpt-5.5`.
 
+For an OpenAI-compatible provider such as SiliconFlow, set:
+
+```powershell
+OPENAI_BASE_URL=https://api.siliconflow.cn/v1
+OPENAI_MODEL=Pro/moonshotai/Kimi-K2.6
+```
+
+When `OPENAI_BASE_URL` is set, the lab uses the Chat Completions-compatible API. Without it, the lab uses OpenAI's Responses API.
+
 ## Smoke Tests
 
 ```powershell
