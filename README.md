@@ -43,6 +43,13 @@ On newer conda installations, the same Python checks can also be run with:
 conda run -n devdefender-lab python -m devdefender_lab.smoke --mode graph
 ```
 
+## Publish
+
+```powershell
+$env:GH_TOKEN="github_pat_..."
+.\scripts\publish_github.ps1
+```
+
 ## Architecture Notes
 
 - `embedded` graph backend is the default because Docker/Memgraph is intentionally out of scope for this first local run.
