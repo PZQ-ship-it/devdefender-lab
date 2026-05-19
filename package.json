@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "slides": "slidev deck/slides.md --host 127.0.0.1 --port 3030",
+    "room": "python -m devdefender_lab.room",
+    "room:mock": "python -m devdefender_lab.room --mock",
+    "slides": "slidev deck/slides.md --remote 127.0.0.1 --port 3030",
     "slides:build": "slidev build deck/slides.md --base /devdefender-lab/"
   },
   "devDependencies": {

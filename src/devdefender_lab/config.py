@@ -15,6 +15,8 @@ class Settings(BaseModel):
     graph_backend: str = Field(default="embedded")
     artifact_dir: Path = Field(default=Path("artifacts"))
     slidev_port: int = Field(default=3030)
+    room_host: str = Field(default="127.0.0.1")
+    room_port: int = Field(default=8765)
 
 
 def load_settings() -> Settings:
@@ -27,4 +29,6 @@ def load_settings() -> Settings:
         graph_backend=os.getenv("DEVDEFENDER_GRAPH_BACKEND", "embedded"),
         artifact_dir=Path(os.getenv("DEVDEFENDER_ARTIFACT_DIR", "artifacts")),
         slidev_port=int(os.getenv("DEVDEFENDER_SLIDEV_PORT", "3030")),
+        room_host=os.getenv("DEVDEFENDER_ROOM_HOST", "127.0.0.1"),
+        room_port=int(os.getenv("DEVDEFENDER_ROOM_PORT", "8765")),
     )

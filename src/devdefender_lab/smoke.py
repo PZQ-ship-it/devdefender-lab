@@ -44,6 +44,7 @@ def main() -> None:
                 "slidev_url": state["slidev_url"],
                 "defense_preview": state["defense"][:240],
                 "issue": state["issue"].model_dump(),
+                "refinement": state["refinement"].model_dump(mode="json"),
             },
             indent=2,
             ensure_ascii=False,
