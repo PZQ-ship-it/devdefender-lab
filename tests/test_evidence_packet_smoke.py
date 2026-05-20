@@ -35,6 +35,69 @@ def test_evidence_packet_smoke_builds_structured_pointers_without_raw_text() -> 
     ]
 
 
+def test_evidence_packet_smoke_builds_meeting_lifecycle_pointers() -> None:
+    replay = {
+        "ok": True,
+        "thread_id": "thread-1",
+        "thread_id_source": "session.json",
+        "timeline_slide_pointers": [
+            {
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "kind": "meeting_joined",
+                "source": "local-meeting-test",
+                "slide_index_at_event": 1,
+            }
+        ],
+    }
+
+    packet = build_evidence_packet(replay)
+
+    assert packet["ok"] is True
+    assert packet["evidence"][0]["timeline_pointer"] == "timeline://thread-1#event=0&kind=meeting_joined"
+
+
+def test_evidence_packet_smoke_builds_meeting_provisioning_pointers() -> None:
+    replay = {
+        "ok": True,
+        "thread_id": "thread-1",
+        "thread_id_source": "session.json",
+        "timeline_slide_pointers": [
+            {
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "kind": "meeting_created",
+                "source": "mock-meeting-provisioner",
+                "slide_index_at_event": 1,
+            }
+        ],
+    }
+
+    packet = build_evidence_packet(replay)
+
+    assert packet["ok"] is True
+    assert packet["evidence"][0]["timeline_pointer"] == "timeline://thread-1#event=0&kind=meeting_created"
+
+
+def test_evidence_packet_smoke_builds_media_route_pointers() -> None:
+    replay = {
+        "ok": True,
+        "thread_id": "thread-1",
+        "thread_id_source": "session.json",
+        "timeline_slide_pointers": [
+            {
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "kind": "media_published",
+                "source": "mock-media-router",
+                "slide_index_at_event": 1,
+            }
+        ],
+    }
+
+    packet = build_evidence_packet(replay)
+
+    assert packet["ok"] is True
+    assert packet["evidence"][0]["timeline_pointer"] == "timeline://thread-1#event=0&kind=media_published"
+
+
 def test_evidence_packet_smoke_rejects_missing_slide_pointer() -> None:
     packet = build_evidence_packet(
         {

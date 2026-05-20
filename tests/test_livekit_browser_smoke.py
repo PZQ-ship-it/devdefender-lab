@@ -44,6 +44,14 @@ def test_livekit_browser_smoke_adds_auto_query_param() -> None:
     assert browser_auto_livekit_url("http://room.test/path?x=1") == "http://room.test/path?x=1&auto_livekit=1"
 
 
+def test_livekit_browser_smoke_can_target_specific_room_and_identity() -> None:
+    assert browser_auto_livekit_url(
+        "http://room.test/path?x=1",
+        livekit_room="devdefender-abc",
+        livekit_identity="identity-1",
+    ) == "http://room.test/path?x=1&auto_livekit=1&livekit_room=devdefender-abc&livekit_identity=identity-1"
+
+
 def test_livekit_browser_smoke_writes_report(tmp_path) -> None:
     report = {"ok": True, "checks": {"livekit_connected_recorded": True}}
     out = tmp_path / "nested" / "livekit_browser_smoke.json"

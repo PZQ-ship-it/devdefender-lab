@@ -12,14 +12,24 @@ DEFAULT_EVIDENCE_POINTER_BUDGET = 24
 
 EVIDENCE_KIND_PRIORITY = {
     "speech_interrupted": 0,
-    "audio_track_published": 1,
-    "livekit_connected": 2,
-    "livekit_error": 3,
-    "tts_word": 4,
-    "manual_voice_command": 5,
-    "livekit_disconnected": 6,
-    "speech_started": 7,
-    "noise": 8,
+    "meeting_error": 1,
+    "meeting_provision_failed": 2,
+    "media_route_error": 3,
+    "media_published": 4,
+    "virtual_audio_ready": 5,
+    "virtual_video_ready": 6,
+    "audio_track_published": 7,
+    "livekit_connected": 8,
+    "meeting_created": 9,
+    "meeting_joined": 10,
+    "meeting_join_started": 11,
+    "meeting_left": 12,
+    "livekit_error": 13,
+    "tts_word": 14,
+    "manual_voice_command": 15,
+    "livekit_disconnected": 16,
+    "speech_started": 17,
+    "noise": 18,
 }
 
 SAFE_THREAD_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")

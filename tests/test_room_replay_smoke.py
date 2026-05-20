@@ -327,6 +327,165 @@ def test_room_replay_smoke_correlates_timeline_events_to_slide_at_event_time(tmp
     ]
 
 
+def test_room_replay_smoke_accepts_meeting_lifecycle_events_without_extra_slide_mapping(tmp_path) -> None:
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    (artifact_dir / "session.json").write_text('{"thread_id":"thread-1"}', encoding="utf-8")
+    _write_jsonl(
+        artifact_dir / "timeline_events.jsonl",
+        [
+            {
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "thread_id": "thread-1",
+                "kind": "tts_word",
+                "source": "tts-anchor-smoke",
+                "token": "next",
+            },
+            {
+                "timestamp": "2026-01-01T00:00:01+00:00",
+                "thread_id": "thread-1",
+                "kind": "meeting_join_started",
+                "source": "local-meeting-test",
+                "command": "https://meeting.local/devdefender?token=REDACTED",
+            },
+            {
+                "timestamp": "2026-01-01T00:00:02+00:00",
+                "thread_id": "thread-1",
+                "kind": "meeting_joined",
+                "source": "local-meeting-test",
+                "command": "https://meeting.local/devdefender?token=REDACTED",
+            },
+            {
+                "timestamp": "2026-01-01T00:00:03+00:00",
+                "thread_id": "thread-1",
+                "kind": "meeting_left",
+                "source": "local-meeting-test",
+                "command": "https://meeting.local/devdefender?token=REDACTED",
+            },
+        ],
+    )
+    _write_jsonl(
+        artifact_dir / "slide_events.jsonl",
+        [
+            {
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "thread_id": "thread-1",
+                "action": "next",
+                "slide_index": 2,
+                "source": "timeline:tts-anchor-smoke",
+            }
+        ],
+    )
+
+    report = build_report(artifact_dir)
+
+    assert report["ok"] is True
+    assert report["expected_mappings"] == [{"action": "next", "source": "timeline:tts-anchor-smoke"}]
+    assert report["timeline_slide_pointers"] == [
+        {
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "kind": "tts_word",
+            "source": "tts-anchor-smoke",
+            "slide_index_at_event": 2,
+        },
+        {
+            "timestamp": "2026-01-01T00:00:01+00:00",
+            "kind": "meeting_join_started",
+            "source": "local-meeting-test",
+            "slide_index_at_event": 2,
+        },
+        {
+            "timestamp": "2026-01-01T00:00:02+00:00",
+            "kind": "meeting_joined",
+            "source": "local-meeting-test",
+            "slide_index_at_event": 2,
+        },
+        {
+            "timestamp": "2026-01-01T00:00:03+00:00",
+            "kind": "meeting_left",
+            "source": "local-meeting-test",
+            "slide_index_at_event": 2,
+        },
+    ]
+
+
+def test_room_replay_smoke_accepts_media_route_events_without_extra_slide_mapping(tmp_path) -> None:
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    (artifact_dir / "session.json").write_text('{"thread_id":"thread-1"}', encoding="utf-8")
+    _write_jsonl(
+        artifact_dir / "timeline_events.jsonl",
+        [
+            {
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "thread_id": "thread-1",
+                "kind": "manual_voice_command",
+                "source": "media-route-smoke",
+                "command": "goto",
+                "slide_index": 1,
+            },
+            {
+                "timestamp": "2026-01-01T00:00:01+00:00",
+                "thread_id": "thread-1",
+                "kind": "virtual_audio_ready",
+                "source": "mock-media-router",
+                "command": "deterministic-audio",
+            },
+            {
+                "timestamp": "2026-01-01T00:00:02+00:00",
+                "thread_id": "thread-1",
+                "kind": "virtual_video_ready",
+                "source": "mock-media-router",
+                "command": "slidev-canvas",
+            },
+            {
+                "timestamp": "2026-01-01T00:00:03+00:00",
+                "thread_id": "thread-1",
+                "kind": "media_published",
+                "source": "mock-media-router",
+                "command": "local-test-target",
+            },
+        ],
+    )
+    _write_jsonl(
+        artifact_dir / "slide_events.jsonl",
+        [
+            {
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "thread_id": "thread-1",
+                "action": "goto",
+                "slide_index": 1,
+                "source": "timeline:media-route-smoke",
+            }
+        ],
+    )
+
+    report = build_report(artifact_dir)
+
+    assert report["ok"] is True
+    assert report["expected_mappings"] == [{"action": "goto", "source": "timeline:media-route-smoke"}]
+    assert report["timeline_slide_pointers"][-3:] == [
+        {
+            "timestamp": "2026-01-01T00:00:01+00:00",
+            "kind": "virtual_audio_ready",
+            "source": "mock-media-router",
+            "slide_index_at_event": 1,
+        },
+        {
+            "timestamp": "2026-01-01T00:00:02+00:00",
+            "kind": "virtual_video_ready",
+            "source": "mock-media-router",
+            "slide_index_at_event": 1,
+        },
+        {
+            "timestamp": "2026-01-01T00:00:03+00:00",
+            "kind": "media_published",
+            "source": "mock-media-router",
+            "slide_index_at_event": 1,
+        },
+    ]
+
+
 def test_room_replay_smoke_defaults_to_session_thread_id(tmp_path) -> None:
     artifact_dir = tmp_path / "artifacts"
     artifact_dir.mkdir()

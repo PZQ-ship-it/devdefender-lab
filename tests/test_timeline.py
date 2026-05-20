@@ -97,6 +97,55 @@ def test_livekit_browser_events_are_recorded_without_slide_change(tmp_path: Path
     assert event.source == "browser-livekit"
 
 
+def test_meeting_lifecycle_events_are_recorded_without_slide_change(tmp_path: Path) -> None:
+    timeline_log = TimelineEventLog(tmp_path / "timeline_events.jsonl", thread_id="thread-1")
+    slide_log = SlideEventLog(tmp_path / "slide_events.jsonl", thread_id="thread-1")
+    adapter = VoiceTimelineAdapter(timeline_log, slide_log)
+
+    result = adapter.ingest(kind="meeting_joined", command="https://meeting.local/devdefender", source="local-meeting-test")
+
+    assert result.slide_event is None
+    assert slide_log.events() == []
+    event = timeline_log.events()[0]
+    assert event.kind == "meeting_joined"
+    assert event.command == "https://meeting.local/devdefender"
+    assert event.source == "local-meeting-test"
+
+
+def test_meeting_provisioning_events_are_recorded_without_slide_change(tmp_path: Path) -> None:
+    timeline_log = TimelineEventLog(tmp_path / "timeline_events.jsonl", thread_id="thread-1")
+    slide_log = SlideEventLog(tmp_path / "slide_events.jsonl", thread_id="thread-1")
+    adapter = VoiceTimelineAdapter(timeline_log, slide_log)
+
+    result = adapter.ingest(
+        kind="meeting_created",
+        command="https://meeting.local/provisioned/abc?token=REDACTED",
+        source="mock-meeting-provisioner",
+    )
+
+    assert result.slide_event is None
+    assert slide_log.events() == []
+    event = timeline_log.events()[0]
+    assert event.kind == "meeting_created"
+    assert event.command == "https://meeting.local/provisioned/abc?token=REDACTED"
+    assert event.source == "mock-meeting-provisioner"
+
+
+def test_media_route_events_are_recorded_without_slide_change(tmp_path: Path) -> None:
+    timeline_log = TimelineEventLog(tmp_path / "timeline_events.jsonl", thread_id="thread-1")
+    slide_log = SlideEventLog(tmp_path / "slide_events.jsonl", thread_id="thread-1")
+    adapter = VoiceTimelineAdapter(timeline_log, slide_log)
+
+    result = adapter.ingest(kind="media_published", command="local-test-target", source="mock-media-router")
+
+    assert result.slide_event is None
+    assert slide_log.events() == []
+    event = timeline_log.events()[0]
+    assert event.kind == "media_published"
+    assert event.command == "local-test-target"
+    assert event.source == "mock-media-router"
+
+
 def test_timeline_event_log_filters_replay_to_current_thread(tmp_path: Path) -> None:
     path = tmp_path / "timeline_events.jsonl"
     thread_1 = TimelineEventLog(path, thread_id="thread-1")

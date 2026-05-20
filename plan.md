@@ -213,3 +213,94 @@ Agent Gateway 执行后，Refiner 只读取 `patch.diff`、`test_report.json`、
 目标：全自动上会，彻底释放人力。
 
 做法：将阶段 2 的能力打包进 Docker。死磕 Puppeteer 与 PulseAudio 虚拟音频路由脚本，让 AI 像幽灵一样自动点击会议链接，绕过权限弹窗，把虚拟的音视频流推上云端。会后自动拉取录音转录，彻底完成自动驾驶式的 Code Review 闭环。
+
+---
+
+## Phase 3E 更新：AI 直接发起会议，而不是等待人工预定
+
+### Phase 3E-LiveKit 更新：AI 直接创建 LiveKit room
+
+已按 LiveKit-first 路线实现 `--provider livekit`：
+
+- `LiveKitMeetingProvisioner` 使用本地环境里的 `LIVEKIT_URL`、`LIVEKIT_API_KEY`、`LIVEKIT_API_SECRET` 创建真实 LiveKit room。
+- room 名称来自当前 DevDefender room thread，输出为非秘密句柄 `livekit://room/<meeting_id>`。
+- 浏览器通过已有 `/api/livekit-token` 获取一次性入会 token，并在主 room 页面用 `auto_livekit=1` 自动加入指定 room。
+- timeline 记录 `meeting_created`、`livekit_connected`、`audio_track_published`。
+- teardown 调用 LiveKit delete room；报告只保存 `join_url` 和 `secret_ref`，不保存 raw token / API secret / cookie / local storage / screenshot / raw media / transcript。
+
+验收命令：
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\meeting_provisioner_smoke.py --provider livekit --managed-room --out artifacts\meeting_provisioner_livekit_smoke.json --timeout 45
+```
+
+当前通过报告：`artifacts/meeting_provisioner_livekit_smoke.json`，`ok: true`，`teardown.command = livekit-room-deleted`。这条路线已经解决“AI 直接发起会议”而不是等待人工预定的问题；Zoom/Tencent 后续作为外部 SaaS provider 再接。
+
+当前 Phase 3D 已经证明：会议自动化事件、媒体路由事件、回放证据、Issue、Agent Task、agent trace、refinement、secret scan 和 pytest 可以在同一条 room thread 上闭环。但它仍然默认“会议链接已经存在”。下一步改为增加 Meeting Provisioner 层，让 AI 先创建会议，再交给 Meeting Adapter 入会。
+
+### 新目标
+
+- AI 根据当前答辩/防御 session 自动创建或分配一个会议。
+- 人不再手动预定会议链接；人只需要一次性配置 provider 凭证或选择本地/self-hosted provider。
+- 普通 artifacts 只保存脱敏 join URL、provider、非秘密 meeting handle、过期时间和 evidence pointer。
+- host start URL、meeting password、OAuth token、SDK token、cookie、localStorage、截图、页面 HTML、原始音视频和 transcript 不进入普通 artifacts。
+
+### 新模块：Meeting Provisioner
+
+Provider-neutral 接口：
+
+```text
+create_meeting(provider, topic, duration, room_thread_id) -> ProvisionedMeeting
+teardown_meeting(provider, meeting_id | secret_ref) -> ProvisioningResult
+```
+
+`ProvisionedMeeting` 只允许暴露：
+
+```text
+provider
+meeting_id 或 meeting_handle
+join_url_redacted
+expires_at
+secret_ref
+```
+
+`secret_ref` 只能指向 env / OS credential vault / cloud secret manager，不能包含真实 secret 值。
+
+### Provider 路线
+
+1. mock/local provisioner：第一步实现，零凭证，用于 CI 和 Phase 3D 兼容性验证。
+2. self-hosted LiveKit provisioner：最适合“AI 完全拥有会议”的路线，AI 创建 room 并生成参会链接。
+3. Zoom provisioner：通过 Zoom Meetings API 创建会议，再由浏览器 adapter 使用受控 start/join 信息入会。
+4. Tencent Meeting provisioner：通过腾讯会议 REST API 创建会议，但需要账号版本/API 权限支持。
+5. Teams/Google Meet provisioner：作为后续企业集成选项。
+
+### 新 timeline 事件
+
+- `meeting_created`
+- `meeting_provision_failed`
+- 继续复用：`meeting_join_started`, `meeting_joined`, `meeting_left`, `meeting_error`
+
+### 新验收门禁
+
+计划新增：
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\meeting_provisioner_smoke.py --provider mock --managed-room --out artifacts\meeting_provisioner_smoke.json
+```
+
+验收条件：
+
+- `meeting_created` 被记录到 timeline。
+- 生成的 join URL 在报告和 timeline 中已脱敏。
+- host/start URL 和 provider token 不进入 artifacts。
+- mock/local provisioned meeting 能交给现有 meeting automation 页面完成 join/leave lifecycle。
+- replay、evidence packet、artifact secret scan 和 Phase 3D closure 仍然通过。
+
+### 下一步实施顺序
+
+1. 增加 `src/devdefender_lab/meeting_provisioner.py`：Pydantic contract、redaction helper、mock provider。
+2. 扩展 timeline/evidence kind：加入 `meeting_created` 和 `meeting_provision_failed`。
+3. 增加 `scripts/meeting_provisioner_smoke.py`：创建 mock meeting -> 写入 timeline -> 交给本地 meeting adapter -> 生成报告。
+4. 增加 tests：contract、secret filtering、smoke report、Phase 3D compatibility。
+5. 更新 Phase 3D closure：可选包含 provisioner gate。
+6. 凭证准备好后，再实现 Zoom/Tencent 的真实 provider adapter。

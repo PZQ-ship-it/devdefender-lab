@@ -7,7 +7,15 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 from devdefender_lab.config import Settings
-from devdefender_lab.room import ROOM_SHUTDOWN_TOKEN_ENV, Phase1Room, RoomHandler, _room_html
+from devdefender_lab.room import (
+    ROOM_SHUTDOWN_TOKEN_ENV,
+    Phase1Room,
+    RoomHandler,
+    _meeting_test_html,
+    _room_html,
+    _webrtc_meeting_test_html,
+    _zoom_discovery_test_html,
+)
 
 
 def test_room_http_api_submits_feedback(tmp_path: Path) -> None:
@@ -204,6 +212,41 @@ def test_room_http_api_maps_manual_voice_command_to_slide_event(tmp_path: Path) 
     assert result["slide_control"]["events"][0]["source"] == "timeline:test-voice"
 
 
+def test_room_http_api_redacts_meeting_event_commands(tmp_path: Path) -> None:
+    room = Phase1Room(Settings(llm_mode="mock", artifact_dir=tmp_path), Path("sample_repo"))
+    handler = type("TestRoomHandler", (RoomHandler,), {"room": room})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+
+    try:
+        payload = json.dumps(
+            {
+                "kind": "meeting_joined",
+                "source": "local-meeting-test",
+                "command": "https://meeting.local/devdefender?room=abc&token=secret-token&pwd=secret-password",
+            }
+        ).encode("utf-8")
+        request = Request(
+            f"{base_url}/api/timeline-event",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=5) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert result["ok"] is True
+    assert result["timeline_event"]["kind"] == "meeting_joined"
+    assert result["timeline_event"]["command"] == "https://meeting.local/devdefender?room=abc&token=REDACTED&pwd=REDACTED"
+    assert "secret-token" not in json.dumps(result)
+
+
 def test_room_http_api_issues_livekit_token_without_secret_leak_or_artifact(tmp_path: Path) -> None:
     settings = Settings(
         llm_mode="mock",
@@ -385,6 +428,8 @@ def test_room_html_contains_livekit_browser_client_hooks(tmp_path: Path) -> None
     assert "createLocalTracks({ audio: true, video: false })" in html
     assert "auto_livekit" in html
     assert "audio_track_published" in html
+    assert "startupParams.get('livekit_room')" in html
+    assert "startupParams.get('livekit_identity')" in html
     assert "auto_interruption" in html
     assert "auto_presenter_cue" in html
     assert "browser-interruption-detector" in html
@@ -405,6 +450,53 @@ def test_room_html_contains_livekit_browser_client_hooks(tmp_path: Path) -> None
     assert "async function sendVoiceCommand(command)" in html
     assert "manual_voice_command" in html
     assert "manual-tts" in html
+    assert "auto_meeting" in html
+    assert "/meeting-test" in html
+
+
+def test_meeting_test_html_posts_structured_meeting_events() -> None:
+    html = _meeting_test_html()
+
+    assert "DevDefender Meeting Test" in html
+    assert "meeting_join_started" in html
+    assert "meeting_joined" in html
+    assert "meeting_left" in html
+    assert "meeting_error" in html
+    assert "local-meeting-test" in html
+    assert "/api/timeline-event" in html
+
+
+def test_webrtc_meeting_test_html_posts_structured_meeting_and_media_events() -> None:
+    html = _webrtc_meeting_test_html()
+
+    assert "DevDefender WebRTC Meeting Test" in html
+    assert "navigator.mediaDevices.getUserMedia" in html
+    assert "RTCPeerConnection" in html
+    assert "meeting_join_started" in html
+    assert "virtual_audio_ready" in html
+    assert "virtual_video_ready" in html
+    assert "meeting_joined" in html
+    assert "media_published" in html
+    assert "meeting_left" in html
+    assert "generic-webrtc-test" in html
+    assert "/api/timeline-event" in html
+    assert "auto_webrtc_meeting" in html
+
+
+def test_zoom_discovery_test_html_posts_structured_discovery_events() -> None:
+    html = _zoom_discovery_test_html()
+
+    assert "DevDefender Zoom Discovery Test" in html
+    assert "auto_zoom_discovery" in html
+    assert "zoom-web-discovery" in html
+    assert "meeting_join_started" in html
+    assert "meeting_joined" in html
+    assert "meeting_left" in html
+    assert "meeting_error" in html
+    assert "zoom-prejoin-detected" in html
+    assert "zoom-discovery-complete" in html
+    assert "data-zoom-control=\"join\"" in html
+    assert "/api/timeline-event" in html
 
 
 def test_room_session_includes_timeline_payload_for_ui(tmp_path: Path) -> None:

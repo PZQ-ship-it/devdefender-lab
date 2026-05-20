@@ -20,6 +20,7 @@ from typing import Any
 from devdefender_lab.config import Settings, load_settings
 from devdefender_lab.models import Phase1Status
 from devdefender_lab.audio_provider import LiveKitAudioProvider, LiveKitBrowserToken
+from devdefender_lab.meeting import redact_meeting_url
 from devdefender_lab.slide_control import SlideControlEvent, SlideEventLog
 from devdefender_lab.timeline import (
     TimelineEventLog,
@@ -236,6 +237,15 @@ class RoomHandler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self._send_html(_room_html(self.room.summary()))
             return
+        if parsed.path == "/meeting-test":
+            self._send_html(_meeting_test_html())
+            return
+        if parsed.path == "/webrtc-meeting-test":
+            self._send_html(_webrtc_meeting_test_html())
+            return
+        if parsed.path == "/zoom-discovery-test":
+            self._send_html(_zoom_discovery_test_html())
+            return
         if parsed.path == "/api/session":
             self._send_json(self.room.summary())
             return
@@ -317,7 +327,7 @@ class RoomHandler(BaseHTTPRequestHandler):
                 kind=str(payload.get("kind", "")),
                 source=str(payload.get("source", "manual")),
                 token=payload.get("token"),
-                command=payload.get("command"),
+                command=_safe_timeline_command(str(payload.get("kind", "")), payload.get("command")),
                 slide_index=payload.get("slide_index"),
                 confidence=payload.get("confidence"),
                 offset_ms=payload.get("offset_ms"),
@@ -454,6 +464,12 @@ def _websocket_text_frame(text: str) -> bytes:
         header.append(127)
         header.extend(length.to_bytes(8, "big"))
     return bytes(header) + payload
+
+
+def _safe_timeline_command(kind: str, command: object) -> object:
+    if isinstance(command, str) and kind.startswith("meeting_"):
+        return redact_meeting_url(command)
+    return command
 
 
 def main() -> None:
@@ -1380,19 +1396,364 @@ def _room_html(summary: dict[str, Any]) -> str:
 
     render(initial);
     connectSlideSocket();
-    if (new URLSearchParams(window.location.search).get('auto_livekit') === '1') {{
+    const startupParams = new URLSearchParams(window.location.search);
+    if (startupParams.get('livekit_room')) {{
+      livekitRoomEl.value = startupParams.get('livekit_room');
+    }}
+    if (startupParams.get('livekit_identity')) {{
+      livekitIdentityEl.value = startupParams.get('livekit_identity');
+    }}
+    if (startupParams.get('auto_livekit') === '1') {{
       selectToolTab('audio');
-      livekitIdentityEl.value = `devdefender-browser-smoke-${{Date.now()}}`;
+      if (!startupParams.get('livekit_identity')) {{
+        livekitIdentityEl.value = `devdefender-browser-smoke-${{Date.now()}}`;
+      }}
       setTimeout(() => connectLiveKitRoom(), 250);
     }}
-    if (new URLSearchParams(window.location.search).get('auto_interruption') === '1') {{
+    if (startupParams.get('auto_interruption') === '1') {{
       selectToolTab('audio');
       setTimeout(() => runDetectorTestBurst(), 250);
     }}
-    if (new URLSearchParams(window.location.search).get('auto_presenter_cue') === '1') {{
+    if (startupParams.get('auto_presenter_cue') === '1') {{
       selectToolTab('audio');
       setTimeout(() => runPresenterCue(), 250);
     }}
+    if (startupParams.get('auto_meeting') === '1') {{
+      setTimeout(() => {{
+        window.location.href = `/meeting-test${{window.location.search}}`;
+      }}, 150);
+    }}
+  </script>
+</body>
+</html>"""
+
+
+def _meeting_test_html() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DevDefender Meeting Test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; color: #17202a; background: #f8fafc; }
+    main { max-width: 720px; margin: 0 auto; }
+    button { border: 0; border-radius: 6px; padding: 10px 14px; background: #0f766e; color: white; font-weight: 700; }
+    .status { margin-top: 16px; padding: 12px; border: 1px solid #d7dde6; background: white; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>DevDefender Meeting Test</h1>
+    <button id="joinButton" type="button">Join and leave</button>
+    <div class="status" id="status">Idle.</div>
+  </main>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const meetingUrl = params.get('meeting_url') || 'local-meeting-test';
+    const statusEl = document.getElementById('status');
+    document.getElementById('joinButton').addEventListener('click', runMeetingLifecycle);
+
+    async function runMeetingLifecycle() {
+      try {
+        statusEl.textContent = 'Join started.';
+        await recordTimelineEvent('meeting_join_started');
+        await delay(160);
+        statusEl.textContent = 'Joined.';
+        await recordTimelineEvent('meeting_joined');
+        await delay(160);
+        statusEl.textContent = 'Left.';
+        await recordTimelineEvent('meeting_left');
+      } catch (error) {
+        statusEl.textContent = error.message || String(error);
+        await recordTimelineEvent('meeting_error', error.message || String(error));
+      }
+    }
+
+    async function recordTimelineEvent(kind, fallbackCommand = null) {
+      const response = await fetch('/api/timeline-event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind,
+          source: 'local-meeting-test',
+          command: fallbackCommand || meetingUrl
+        })
+      });
+      const payload = await response.json();
+      if (!payload.ok) {
+        throw new Error(payload.error || 'Timeline event failed.');
+      }
+      return payload;
+    }
+
+    function delay(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    if (params.get('auto_meeting') === '1') {
+      setTimeout(() => runMeetingLifecycle(), 250);
+    }
+  </script>
+</body>
+</html>"""
+
+
+def _webrtc_meeting_test_html() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DevDefender WebRTC Meeting Test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; color: #17202a; background: #f8fafc; }
+    main { max-width: 760px; margin: 0 auto; }
+    button { border: 0; border-radius: 6px; padding: 10px 14px; background: #0f766e; color: white; font-weight: 700; }
+    .status { margin-top: 16px; padding: 12px; border: 1px solid #d7dde6; background: white; border-radius: 6px; }
+    video { width: 320px; max-width: 100%; margin-top: 16px; background: #111827; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>DevDefender WebRTC Meeting Test</h1>
+    <button id="joinButton" type="button">Join WebRTC test</button>
+    <div class="status" id="status">Idle.</div>
+    <video id="preview" autoplay muted playsinline></video>
+  </main>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const meetingUrl = params.get('meeting_url') || 'webrtc-local-test';
+    const statusEl = document.getElementById('status');
+    const previewEl = document.getElementById('preview');
+    let localStream = null;
+    let pc1 = null;
+    let pc2 = null;
+    document.getElementById('joinButton').addEventListener('click', runWebRtcLifecycle);
+
+    async function runWebRtcLifecycle() {
+      try {
+        statusEl.textContent = 'Join started.';
+        await recordTimelineEvent({ kind: 'meeting_join_started', source: 'generic-webrtc-test', command: meetingUrl });
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        previewEl.srcObject = localStream;
+        await recordTimelineEvent({
+          kind: 'virtual_audio_ready',
+          source: 'generic-webrtc-test',
+          command: 'getUserMedia:audio',
+          confidence: 1,
+          offset_ms: 0
+        });
+        await recordTimelineEvent({
+          kind: 'virtual_video_ready',
+          source: 'generic-webrtc-test',
+          command: 'getUserMedia:video',
+          confidence: 1,
+          offset_ms: 0
+        });
+        await connectLocalPeer(localStream);
+        await recordTimelineEvent({
+          kind: 'meeting_joined',
+          source: 'generic-webrtc-test',
+          command: meetingUrl
+        });
+        await recordTimelineEvent({
+          kind: 'media_published',
+          source: 'generic-webrtc-test',
+          command: 'local-peer-connection',
+          confidence: 1,
+          offset_ms: 120
+        });
+        await delay(220);
+        await closeMeeting();
+        statusEl.textContent = 'Left.';
+        await recordTimelineEvent({ kind: 'meeting_left', source: 'generic-webrtc-test', command: meetingUrl });
+      } catch (error) {
+        statusEl.textContent = error.message || String(error);
+        await recordTimelineEvent({
+          kind: 'meeting_error',
+          source: 'generic-webrtc-test',
+          command: error.message || String(error)
+        });
+      }
+    }
+
+    async function connectLocalPeer(stream) {
+      pc1 = new RTCPeerConnection();
+      pc2 = new RTCPeerConnection();
+      pc1.onicecandidate = (event) => event.candidate && pc2.addIceCandidate(event.candidate);
+      pc2.onicecandidate = (event) => event.candidate && pc1.addIceCandidate(event.candidate);
+      stream.getTracks().forEach((track) => pc1.addTrack(track, stream));
+      const offer = await pc1.createOffer();
+      await pc1.setLocalDescription(offer);
+      await pc2.setRemoteDescription(offer);
+      const answer = await pc2.createAnswer();
+      await pc2.setLocalDescription(answer);
+      await pc1.setRemoteDescription(answer);
+      await waitForConnection(pc1);
+    }
+
+    function waitForConnection(peer) {
+      if (peer.connectionState === 'connected') {
+        return Promise.resolve();
+      }
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('WebRTC connection timed out.')), 5000);
+        peer.addEventListener('connectionstatechange', () => {
+          if (peer.connectionState === 'connected') {
+            clearTimeout(timeout);
+            resolve();
+          }
+          if (peer.connectionState === 'failed') {
+            clearTimeout(timeout);
+            reject(new Error('WebRTC connection failed.'));
+          }
+        });
+      });
+    }
+
+    async function closeMeeting() {
+      if (pc1) {
+        pc1.close();
+        pc1 = null;
+      }
+      if (pc2) {
+        pc2.close();
+        pc2 = null;
+      }
+      if (localStream) {
+        localStream.getTracks().forEach((track) => track.stop());
+        localStream = null;
+      }
+      previewEl.srcObject = null;
+    }
+
+    async function recordTimelineEvent(payload) {
+      const response = await fetch('/api/timeline-event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!result.ok) {
+        throw new Error(result.error || 'Timeline event failed.');
+      }
+      return result;
+    }
+
+    function delay(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    if (params.get('auto_webrtc_meeting') === '1') {
+      setTimeout(() => runWebRtcLifecycle(), 250);
+    }
+  </script>
+</body>
+</html>"""
+
+
+def _zoom_discovery_test_html() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DevDefender Zoom Discovery Test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; color: #17202a; background: #f8fafc; }
+    main { max-width: 760px; margin: 0 auto; }
+    label { display: block; margin-bottom: 8px; font-weight: 700; }
+    input { box-sizing: border-box; width: 100%; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px 12px; }
+    button { border: 0; border-radius: 6px; padding: 10px 14px; background: #0f766e; color: white; font-weight: 700; }
+    .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+    .secondary { background: #334155; }
+    .status { margin-top: 16px; padding: 12px; border: 1px solid #d7dde6; background: white; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>DevDefender Zoom Discovery Test</h1>
+    <label for="displayName">Display name</label>
+    <input id="displayName" name="displayName" autocomplete="off" value="DevDefender Tester">
+    <div class="controls" aria-label="Zoom-like prejoin controls">
+      <button id="joinButton" type="button" data-zoom-control="join">Join from browser</button>
+      <button id="audioToggle" class="secondary" type="button" data-zoom-control="audio">Mute audio</button>
+      <button id="videoToggle" class="secondary" type="button" data-zoom-control="video">Stop video</button>
+      <button id="leaveButton" class="secondary" type="button" data-zoom-control="leave">Leave</button>
+    </div>
+    <div class="status" id="status">Idle.</div>
+  </main>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const zoomUrl = params.get('zoom_url') || 'https://zoom.us/wc/join/123456789?pwd=local-secret';
+    const statusEl = document.getElementById('status');
+    const controlIds = ['displayName', 'joinButton', 'audioToggle', 'videoToggle', 'leaveButton'];
+    document.getElementById('joinButton').addEventListener('click', runZoomDiscovery);
+    document.getElementById('leaveButton').addEventListener('click', () => recordTimelineEvent({
+      kind: 'meeting_left',
+      source: 'zoom-web-discovery',
+      command: 'zoom-discovery-complete'
+    }));
+
+    async function runZoomDiscovery() {
+      try {
+        statusEl.textContent = 'Zoom Web discovery started.';
+        await recordTimelineEvent({
+          kind: 'meeting_join_started',
+          source: 'zoom-web-discovery',
+          command: zoomUrl
+        });
+        await delay(120);
+        const missingControls = controlIds.filter((id) => !document.getElementById(id));
+        if (missingControls.length) {
+          throw new Error('Zoom discovery controls missing.');
+        }
+        statusEl.textContent = 'Zoom prejoin controls detected.';
+        await recordTimelineEvent({
+          kind: 'meeting_joined',
+          source: 'zoom-web-discovery',
+          command: 'zoom-prejoin-detected',
+          confidence: 1,
+          offset_ms: 0
+        });
+        await delay(120);
+        statusEl.textContent = 'Zoom discovery complete.';
+        await recordTimelineEvent({
+          kind: 'meeting_left',
+          source: 'zoom-web-discovery',
+          command: 'zoom-discovery-complete'
+        });
+      } catch (error) {
+        statusEl.textContent = error.message || String(error);
+        await recordTimelineEvent({
+          kind: 'meeting_error',
+          source: 'zoom-web-discovery',
+          command: error.message || String(error)
+        });
+      }
+    }
+
+    async function recordTimelineEvent(payload) {
+      const response = await fetch('/api/timeline-event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!result.ok) {
+        throw new Error(result.error || 'Timeline event failed.');
+      }
+      return result;
+    }
+
+    function delay(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    if (params.get('auto_zoom_discovery') === '1') {
+      setTimeout(() => runZoomDiscovery(), 250);
+    }
   </script>
 </body>
 </html>"""

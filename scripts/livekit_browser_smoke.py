@@ -37,11 +37,18 @@ def main() -> int:
     return 0 if report["ok"] else 1
 
 
-def run_smoke(room_url: str, out: Path, browser: str | None = None, timeout: float = 35.0) -> dict[str, object]:
+def run_smoke(
+    room_url: str,
+    out: Path,
+    browser: str | None = None,
+    timeout: float = 35.0,
+    livekit_room: str | None = None,
+    livekit_identity: str | None = None,
+) -> dict[str, object]:
     browser_path = find_browser(browser)
     before = _get_json(f"{room_url}/api/timeline-events")
     before_events = _events(before)
-    target = browser_auto_livekit_url(room_url)
+    target = browser_auto_livekit_url(room_url, livekit_room=livekit_room, livekit_identity=livekit_identity)
 
     process = subprocess.Popen(
         [
@@ -121,10 +128,19 @@ def wait_for_livekit_events(room_url: str, baseline_count: int, timeout: float) 
     return last_timeline
 
 
-def browser_auto_livekit_url(room_url: str) -> str:
+def browser_auto_livekit_url(
+    room_url: str,
+    *,
+    livekit_room: str | None = None,
+    livekit_identity: str | None = None,
+) -> str:
     parsed = urllib.parse.urlparse(room_url)
     query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
     query.append(("auto_livekit", "1"))
+    if livekit_room:
+        query.append(("livekit_room", livekit_room))
+    if livekit_identity:
+        query.append(("livekit_identity", livekit_identity))
     return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query)))
 
 

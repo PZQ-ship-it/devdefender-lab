@@ -22,6 +22,16 @@ TimelineEventKind = Literal[
     "livekit_disconnected",
     "livekit_error",
     "audio_track_published",
+    "meeting_created",
+    "meeting_provision_failed",
+    "meeting_join_started",
+    "meeting_joined",
+    "meeting_left",
+    "meeting_error",
+    "virtual_audio_ready",
+    "virtual_video_ready",
+    "media_published",
+    "media_route_error",
 ]
 
 DEFAULT_NEXT_ANCHORS = {"next", "continue", "\u4e0b\u4e00\u9875", "\u4e0b\u4e00\u4e2a", "\u7ee7\u7eed"}
