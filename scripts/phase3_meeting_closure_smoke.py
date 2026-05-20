@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ DEFAULT_OUT = ARTIFACT_DIR / "phase3_meeting_closure_smoke.json"
 DEFAULT_FULL_OUT = ARTIFACT_DIR / "phase3_meeting_closure_smoke.full.json"
 DEFAULT_ROOM_ACCEPTANCE_OUT = ARTIFACT_DIR / "phase3d_room_acceptance.json"
 DEFAULT_MEETING_OUT = ARTIFACT_DIR / "phase3d_meeting_automation_smoke.json"
+DEFAULT_PROVISIONER_OUT = ARTIFACT_DIR / "phase3d_meeting_provisioner_smoke.json"
 DEFAULT_MEDIA_OUT = ARTIFACT_DIR / "phase3d_media_route_smoke.json"
 DEFAULT_WEBRTC_OUT = ARTIFACT_DIR / "phase3d_webrtc_meeting_smoke.json"
 DEFAULT_ZOOM_OUT = ARTIFACT_DIR / "phase3d_zoom_web_discovery_smoke.json"
@@ -37,6 +39,8 @@ class Step:
     command: list[str]
     timeout: int
     env: dict[str, str] | None = None
+    attempts: int = 1
+    retry_delay: float = 2.0
 
 
 def main() -> None:
@@ -50,6 +54,20 @@ def main() -> None:
     parser.add_argument("--skip-visual", action="store_true", help="Skip room visual smoke in the baseline room acceptance step.")
     parser.add_argument("--include-livekit-token", action="store_true", help="Include LiveKit token smoke in room acceptance.")
     parser.add_argument("--include-livekit-browser", action="store_true", help="Include LiveKit browser smoke in room acceptance.")
+    parser.add_argument(
+        "--meeting-provider",
+        choices=["livekit", "mock"],
+        default="livekit",
+        help="AI-initiated meeting provider for the default Phase 3D meeting path.",
+    )
+    parser.add_argument(
+        "--skip-meeting-provisioner",
+        action="store_true",
+        help="Skip the AI-initiated meeting provisioner gate.",
+    )
+    parser.add_argument("--provisioner-timeout", type=float, default=45.0, help="Seconds to wait for provisioned meeting events.")
+    parser.add_argument("--provisioner-attempts", type=int, default=3, help="LiveKit provisioner attempts before failing.")
+    parser.add_argument("--provisioner-retry-delay", type=float, default=3.0, help="Seconds between provisioner attempts.")
     parser.add_argument(
         "--agent-backend",
         choices=["mock", "openclaude-cli"],
@@ -66,6 +84,7 @@ def main() -> None:
     parser.add_argument("--full-out", type=Path, default=DEFAULT_FULL_OUT, help="Path for the full child-step report.")
     parser.add_argument("--room-acceptance-out", type=Path, default=DEFAULT_ROOM_ACCEPTANCE_OUT)
     parser.add_argument("--meeting-out", type=Path, default=DEFAULT_MEETING_OUT)
+    parser.add_argument("--provisioner-out", type=Path, default=DEFAULT_PROVISIONER_OUT)
     parser.add_argument("--media-out", type=Path, default=DEFAULT_MEDIA_OUT)
     parser.add_argument("--webrtc-out", type=Path, default=DEFAULT_WEBRTC_OUT)
     parser.add_argument("--zoom-out", type=Path, default=DEFAULT_ZOOM_OUT)
@@ -79,6 +98,7 @@ def main() -> None:
         room_url=args.room_url,
         room_acceptance_out=args.room_acceptance_out,
         meeting_out=args.meeting_out,
+        provisioner_out=args.provisioner_out,
         media_out=args.media_out,
         webrtc_out=args.webrtc_out,
         zoom_out=args.zoom_out,
@@ -86,6 +106,11 @@ def main() -> None:
         skip_visual=args.skip_visual,
         include_livekit_token=args.include_livekit_token,
         include_livekit_browser=args.include_livekit_browser,
+        include_meeting_provisioner=not args.skip_meeting_provisioner,
+        meeting_provider=args.meeting_provider,
+        provisioner_timeout=args.provisioner_timeout,
+        provisioner_attempts=args.provisioner_attempts,
+        provisioner_retry_delay=args.provisioner_retry_delay,
     )
     post_steps = build_post_room_steps(
         repo=args.repo,
@@ -154,6 +179,7 @@ def build_room_steps(
     room_url: str,
     room_acceptance_out: Path = DEFAULT_ROOM_ACCEPTANCE_OUT,
     meeting_out: Path = DEFAULT_MEETING_OUT,
+    provisioner_out: Path = DEFAULT_PROVISIONER_OUT,
     media_out: Path = DEFAULT_MEDIA_OUT,
     webrtc_out: Path = DEFAULT_WEBRTC_OUT,
     zoom_out: Path = DEFAULT_ZOOM_OUT,
@@ -161,6 +187,11 @@ def build_room_steps(
     skip_visual: bool = False,
     include_livekit_token: bool = False,
     include_livekit_browser: bool = False,
+    include_meeting_provisioner: bool = True,
+    meeting_provider: str = "livekit",
+    provisioner_timeout: float = 45.0,
+    provisioner_attempts: int = 3,
+    provisioner_retry_delay: float = 3.0,
 ) -> list[Step]:
     room_acceptance = [
         sys.executable,
@@ -177,7 +208,7 @@ def build_room_steps(
     if include_livekit_browser:
         room_acceptance.append("--include-livekit-browser")
 
-    return [
+    steps = [
         Step("room_acceptance", room_acceptance, timeout=360),
         Step(
             "meeting_automation",
@@ -191,7 +222,31 @@ def build_room_steps(
             ],
             timeout=120,
         ),
-        Step(
+    ]
+    if include_meeting_provisioner:
+        steps.append(
+            Step(
+                "meeting_provisioner",
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "meeting_provisioner_smoke.py"),
+                    "--room-url",
+                    room_url,
+                    "--provider",
+                    meeting_provider,
+                    "--timeout",
+                    str(provisioner_timeout),
+                    "--out",
+                    str(provisioner_out),
+                ],
+                timeout=max(120, int(provisioner_timeout) + 90),
+                attempts=max(1, int(provisioner_attempts)),
+                retry_delay=provisioner_retry_delay,
+            )
+        )
+    steps.extend(
+        [
+            Step(
             "media_route",
             [
                 sys.executable,
@@ -203,7 +258,7 @@ def build_room_steps(
             ],
             timeout=120,
         ),
-        Step(
+            Step(
             "webrtc_meeting",
             [
                 sys.executable,
@@ -215,7 +270,7 @@ def build_room_steps(
             ],
             timeout=160,
         ),
-        Step(
+            Step(
             "zoom_web_discovery",
             [
                 sys.executable,
@@ -227,8 +282,8 @@ def build_room_steps(
             ],
             timeout=120,
         ),
-        Step("room_replay", [sys.executable, str(ROOT / "scripts" / "room_replay_smoke.py")], timeout=120),
-        Step(
+            Step("room_replay", [sys.executable, str(ROOT / "scripts" / "room_replay_smoke.py")], timeout=120),
+            Step(
             "evidence_packet",
             [
                 sys.executable,
@@ -238,7 +293,9 @@ def build_room_steps(
             ],
             timeout=120,
         ),
-    ]
+        ]
+    )
+    return steps
 
 
 def build_post_room_steps(
@@ -286,6 +343,25 @@ def run_step(step: Step) -> dict[str, object]:
     env = os.environ.copy()
     if step.env:
         env.update(step.env)
+    attempt_results: list[dict[str, object]] = []
+    for attempt in range(1, max(1, step.attempts) + 1):
+        result = _run_step_once(step, env, attempt)
+        attempt_results.append(_summarize_attempt_result(result, attempt))
+        if result["ok"]:
+            if step.attempts > 1:
+                result["attempt"] = attempt
+                result["attempts"] = step.attempts
+                result["attempt_results"] = attempt_results
+            return result
+        if attempt < step.attempts:
+            time.sleep(step.retry_delay)
+    result["attempt"] = step.attempts
+    result["attempts"] = step.attempts
+    result["attempt_results"] = attempt_results
+    return result
+
+
+def _run_step_once(step: Step, env: dict[str, str], attempt: int) -> dict[str, object]:
     try:
         process = subprocess.run(
             step.command,
@@ -304,6 +380,7 @@ def run_step(step: Step) -> dict[str, object]:
             "return_code": process.returncode,
             "payload": payload,
             "stderr": process.stderr.strip(),
+            "attempt": attempt,
         }
     except subprocess.TimeoutExpired as exc:
         return {
@@ -312,7 +389,19 @@ def run_step(step: Step) -> dict[str, object]:
             "return_code": None,
             "payload": {},
             "stderr": f"Timed out after {step.timeout}s: {exc}",
+            "attempt": attempt,
         }
+
+
+def _summarize_attempt_result(result: dict[str, object], attempt: int) -> dict[str, object]:
+    payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+    return {
+        "attempt": attempt,
+        "ok": bool(result.get("ok")),
+        "return_code": result.get("return_code"),
+        "new_event_kinds": payload.get("new_event_kinds") if isinstance(payload, dict) else None,
+        "last_livekit_error": payload.get("last_livekit_error") if isinstance(payload, dict) else None,
+    }
 
 
 def duplicate_evidence_packet(source: Path, destination: Path) -> dict[str, object]:
@@ -416,6 +505,10 @@ def build_cross_checks(
         "local_meeting_lifecycle_in_packet_ok": _packet_has_source_kinds(
             packet_evidence, "local-meeting-test", {"meeting_join_started", "meeting_joined", "meeting_left"}
         ),
+        "livekit_provisioned_meeting_in_packet_ok": _packet_has_source_kinds(
+            packet_evidence, "livekit-meeting-provisioner", {"meeting_created"}
+        )
+        and _packet_has_source_kinds(packet_evidence, "browser-livekit", {"livekit_connected", "audio_track_published"}),
         "media_route_events_in_packet_ok": _packet_has_source_kinds(
             packet_evidence, "mock-media-router", {"virtual_audio_ready", "virtual_video_ready", "media_published"}
         ),
@@ -443,6 +536,18 @@ def build_cross_checks(
             _contains_kind(evidence_chain_pointers, "meeting_joined")
             and _contains_kind(evidence_chain_pointers, "media_published")
         ),
+        "livekit_pointers_in_evidence_chain_ok": not evidence_chain
+        or (
+            _contains_kind(evidence_chain_pointers, "meeting_created")
+            and _contains_kind(evidence_chain_pointers, "livekit_connected")
+            and _contains_kind(evidence_chain_pointers, "audio_track_published")
+        ),
+        "livekit_pointers_in_issue_ok": not phase1_e2e
+        or (
+            _contains_kind(issue_evidence, "meeting_created")
+            and _contains_kind(issue_evidence, "livekit_connected")
+            and _contains_kind(issue_evidence, "audio_track_published")
+        ),
         "artifact_secret_clean_ok": not artifact_secret or (isinstance(findings, list) and not findings),
         "pytest_reported_ok": not pytest_payload or pytest_payload.get("ok") is True,
     }
@@ -463,6 +568,8 @@ def summarize_results(results: list[dict[str, object]]) -> list[dict[str, object
         stderr = str(result.get("stderr") or "").strip()
         if stderr:
             summary["stderr_tail"] = stderr[-500:]
+        if result.get("attempt_results"):
+            summary["attempt_results"] = result.get("attempt_results")
         summaries.append(summary)
     return summaries
 
@@ -476,6 +583,7 @@ def child_report_paths(args: argparse.Namespace) -> dict[str, str]:
     return {
         "room_acceptance": str(args.room_acceptance_out),
         "meeting_automation": str(args.meeting_out),
+        "meeting_provisioner": str(args.provisioner_out),
         "media_route": str(args.media_out),
         "webrtc_meeting": str(args.webrtc_out),
         "zoom_web_discovery": str(args.zoom_out),
@@ -515,6 +623,7 @@ def _payload_summary(name: str, payload: dict[str, object]) -> dict[str, object]
     if name in {
         "room_acceptance",
         "meeting_automation",
+        "meeting_provisioner",
         "media_route",
         "webrtc_meeting",
         "zoom_web_discovery",

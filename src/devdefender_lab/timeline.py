@@ -22,6 +22,8 @@ TimelineEventKind = Literal[
     "livekit_disconnected",
     "livekit_error",
     "audio_track_published",
+    "tts_audio_track_created",
+    "tts_audio_track_published",
     "meeting_created",
     "meeting_provision_failed",
     "meeting_join_started",

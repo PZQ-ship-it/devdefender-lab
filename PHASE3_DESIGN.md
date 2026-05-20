@@ -110,6 +110,7 @@ Responsibilities:
 - Use the existing timeline-to-slide mapping for `tts_word`.
 - Avoid direct iframe manipulation outside existing slide APIs.
 - Emit timing metadata only as offsets and confidence values, not raw transcript text.
+- Phase 4 starts with a browser Web Speech Synthesis harness that emits only structured `speech_started` and `tts_word` events.
 
 ### Interruption Detector
 
@@ -121,6 +122,47 @@ Responsibilities:
 - Preserve confidence and offset metadata.
 - Never persist raw audio, audio paths, or full transcript text in the default artifact set.
 - Support a mock/deterministic mode for CI and local smoke tests.
+- Phase 4 starts with a deterministic browser Web Audio test burst that emits interruption events without saving audio.
+
+### Phase 4 Voice Defense Flow
+
+Owns the first local "AI defense" speaking loop after LiveKit is the default meeting substrate.
+
+Responsibilities:
+
+- Open with generated/browser TTS speech.
+- Emit a `tts_word` anchor that advances the slide through the existing timeline mapping.
+- Simulate a reviewer interruption with structured speech activity and interruption events.
+- Answer the interruption, clearing the active interruption state through a follow-up speech event.
+- Resume the defense and emit another `tts_word` anchor.
+- Preserve only structured timeline and slide evidence pointers.
+
+### Phase 4B LiveKit TTS Audio Route
+
+Owns the first real LiveKit audio-track route for generated defense speech.
+
+Responsibilities:
+
+- Create a LiveKit room through the accepted LiveKit meeting provisioner.
+- Generate local TTS audio through the room server's `/api/tts-audio` endpoint without writing the WAV into normal artifacts.
+- Decode the TTS WAV in the browser and route it through a Web Audio `MediaStreamDestination`.
+- Publish that generated audio `MediaStreamTrack` to LiveKit as `devdefender-tts-audio`.
+- Emit only structured timeline events: `meeting_created`, `livekit_connected`, `tts_audio_track_created`, `tts_audio_track_published`, `speech_started`, and `tts_word`.
+- Preserve no raw audio, audio paths, full transcript, browser token, API secret, cookies, screenshots, or local storage in normal artifacts.
+
+### Phase 4C LiveKit Remote Interruption Detection
+
+Owns the first real remote-audio interruption path inside a LiveKit room.
+
+Responsibilities:
+
+- Create a LiveKit room through the accepted LiveKit meeting provisioner.
+- Connect a detector participant and a reviewer participant to the same LiveKit room.
+- Publish generated reviewer speech as a real LiveKit audio track.
+- Subscribe to the reviewer track from the detector participant.
+- Attach and capture the remote audio element, then run browser Web Audio RMS detection.
+- Emit only structured `speech_started` and `speech_interrupted` events for the remote interruption.
+- Preserve no raw audio, audio paths, full transcript, browser token, API secret, cookies, screenshots, or local storage in normal artifacts.
 
 ### Orchestrator
 
@@ -233,7 +275,7 @@ This is an adapter discovery gate, not proof of full Zoom Web login, waiting roo
 
 ### Slice 3D: End-to-End Closure
 
-- The meeting automation gate runs room acceptance, meeting adapter smoke, media route smoke, replay, evidence packet, evidence chain, artifact secret scan, and OpenClaude Phase 1 closure.
+- The meeting automation gate runs room acceptance, local meeting adapter smoke, the default AI-initiated LiveKit provisioner, media route smoke, replay, evidence packet, evidence chain, artifact secret scan, and Phase 1 closure.
 - The compact report must show every required check true.
 - LiveKit/meeting/media pointers must be present in both the evidence chain and Issue evidence when their smokes ran.
 - The same room thread must be used across replay, evidence packet, evidence chain, and Issue evidence.
@@ -244,7 +286,7 @@ Current Phase 3D gate:
 C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\phase3_meeting_closure_smoke.py --skip-visual --out artifacts\phase3_meeting_closure_smoke.json --full-out artifacts\phase3_meeting_closure_smoke.full.json
 ```
 
-The accepted report is `artifacts/phase3_meeting_closure_smoke.json`, with full child-step details in `artifacts/phase3_meeting_closure_smoke.full.json`. It starts one managed room, runs the room baseline, 3A local meeting automation, 3B media route, 3C generic WebRTC, 3C Zoom Web discovery, replay, evidence packet, Phase 1 e2e, evidence chain, artifact secret scan, and pytest. The accepted run produced 30 replay-derived evidence events on one room thread and confirmed local meeting, media route, WebRTC, and Zoom discovery events all entered the packet.
+The accepted report is `artifacts/phase3_meeting_closure_smoke.json`, with full child-step details in `artifacts/phase3_meeting_closure_smoke.full.json`. It starts one managed room, runs the room baseline, 3A local meeting automation, the default LiveKit provider through `meeting_provisioner_smoke.py --provider livekit`, 3B media route, 3C generic WebRTC, 3C Zoom Web discovery, replay, evidence packet, Phase 1 e2e, evidence chain, artifact secret scan, and pytest. The accepted run produced 34 replay-derived evidence events on one room thread and confirmed local meeting, LiveKit provisioner, media route, WebRTC, and Zoom discovery events all entered the packet. The LiveKit provider step has bounded retry because browser signal connection setup can fail transiently; the accepted run passed on attempt 1.
 
 ### Slice 3E: AI-Initiated Meeting Provisioning
 
@@ -270,27 +312,141 @@ C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\meeting_provi
 
 The accepted report is `artifacts/meeting_provisioner_livekit_smoke.json`. It uses `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` from the local environment to create a real LiveKit room named from the current room thread, records `meeting_created`, then opens the room browser with `auto_livekit=1` and verifies `livekit_connected` plus `audio_track_published`. The report stores only the non-secret `livekit://room/...` handle and `secret_ref`, deletes the LiveKit room during teardown, removes the browser profile, and keeps the raw browser token/API secret out of artifacts.
 
+### Slice 4A: Browser TTS Defense Flow
+
+- A dedicated `/voice-defense-test` page runs the first local TTS/interruption/resume loop.
+- The browser calls Web Speech Synthesis for the opening, interruption answer, and resumed explanation.
+- The page emits only structured timeline events, not transcripts or raw audio.
+- Two `tts_word: next` anchors must advance slides twice.
+- A deterministic Web Audio test burst must emit `speech_started` and `speech_interrupted`.
+- The follow-up answer/resume speech must clear the active interruption state.
+
+Current Phase 4A gate:
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\phase4_voice_defense_smoke.py --managed-room --out artifacts\phase4_voice_defense_smoke.json --timeout 35
+```
+
+The accepted report is `artifacts/phase4_voice_defense_smoke.json`. It records seven new timeline events, advances from slide 1 to slide 3 through two TTS anchors, marks the interruption handled after the answer/resume path, removes the managed room cleanly, and keeps raw audio/transcript fields out of the report. Replay and evidence packet acceptance are stored in `artifacts/evidence_packet_phase4_voice_defense.json`.
+
+### Slice 4B: LiveKit TTS Audio Track
+
+- A dedicated `/livekit-tts-test` page publishes generated TTS audio into a provisioned LiveKit room.
+- The room server returns SAPI-generated WAV bytes from `/api/tts-audio`; the response is not written to normal artifacts.
+- The browser decodes the WAV with `decodeAudioData`, routes it through Web Audio, and publishes the resulting audio track to LiveKit.
+- The smoke must verify `tts_audio_track_created` and `tts_audio_track_published`, plus a `tts_word: next` anchor.
+- The report must keep raw audio/transcript fields out and teardown the LiveKit room.
+
+Current Phase 4B gate:
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\phase4_livekit_tts_smoke.py --managed-room --out artifacts\phase4_livekit_tts_smoke.json --timeout 75
+```
+
+The accepted report is `artifacts/phase4_livekit_tts_smoke.json`. It creates a LiveKit room, records six new timeline events, publishes the generated SAPI WAV media stream as a LiveKit audio track, advances one slide through the TTS anchor, deletes the LiveKit room during teardown, and keeps raw audio/transcript fields out of the report. Replay and evidence packet acceptance are stored in `artifacts/evidence_packet_phase4_livekit_tts.json`.
+
+### Slice 4C: LiveKit Remote Audio Interruption
+
+- A dedicated `/livekit-interruption-test` page connects detector and reviewer participants to the same LiveKit room.
+- The reviewer participant publishes generated reviewer speech as a LiveKit audio track.
+- The detector participant subscribes to the reviewer track and detects speech/interruption through Web Audio RMS.
+- The page emits a timeline-driven `goto` baseline event for replay, then structured meeting/audio/interruption events.
+- The report must keep raw audio/transcript fields out and teardown the LiveKit room.
+
+Current Phase 4C gate:
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\phase4_livekit_interruption_smoke.py --managed-room --out artifacts\phase4_livekit_interruption_smoke.json --timeout 90
+```
+
+The accepted report is `artifacts/phase4_livekit_interruption_smoke.json`. It records detector and reviewer LiveKit connections, reviewer audio-track publish, remote `speech_started`, remote `speech_interrupted`, active interruption state, clean LiveKit teardown, and no raw audio/transcript fields. Replay and evidence packet acceptance are stored in `artifacts/evidence_packet_phase4_livekit_interruption.json`.
+
+## Product Direction: Project Briefing Room
+
+The next product step is not another external meeting SaaS adapter. The product should package the accepted LiveKit meeting runtime as a lightweight, code-agent-friendly project briefing workflow.
+
+Default product shape:
+
+- A repo-versioned Codex skill named `project-briefing-room` is the user-facing entry point.
+- The skill is a thin orchestrator, not the whole product runtime.
+- The deterministic local runtime keeps ownership of repo scanning, graph/deck generation, LiveKit room provisioning, TTS publishing, remote interruption detection, evidence packets, replay, and secret scanning.
+- Code agents integrate through structured briefing adapters instead of controlling meeting internals directly.
+- LiveKit remains the default AI-initiated meeting path because the agent can create and tear down the room without a human scheduling a Zoom/Tencent meeting first.
+
+The product skill should:
+
+- Inspect the current repo/task state, recent changes, tests, artifacts, and design notes.
+- Ask the active code agent adapter for a structured project briefing report.
+- Translate code-level facts into non-technical stakeholder language: architecture sketch, progress, requirements coverage, experiments, risks, open decisions, and next asks.
+- Request diagram/deck generation from the local runtime.
+- Launch the LiveKit-backed room flow and preserve only structured evidence.
+- Optionally call or install dependency skills when the user's environment supports them.
+
+Structured code-agent briefing output should be JSON-shaped and provider-neutral:
+
+```text
+{
+  audience_summary,
+  architecture_diagrams,
+  progress_status,
+  requirements_coverage,
+  experiment_results,
+  risks_and_unknowns,
+  stakeholder_questions,
+  follow_up_tasks,
+  evidence_pointers
+}
+```
+
+Skill dependency policy:
+
+- Required dependency: none beyond this repo runtime and the product skill itself.
+- Optional install/call candidates: `speech` for speech provider setup, `transcribe` only if true recording transcription becomes an accepted requirement, `notion-meeting-intelligence` for meeting notes sync, `security-threat-model` and `security-ownership-map` for security-oriented briefings, plus installed local `pdf`, `playwright`, and `screenshot` skills for artifact and visual checks.
+- Figma skills are deferred unless the product needs UI/design handoff output.
+- Existing skills do not replace this product workflow; they are dependencies the product skill may orchestrate.
+
+Planned Phase 4D gate:
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\project_briefing_room_smoke.py --managed-room --agent-backend mock --out artifacts\project_briefing_room_smoke.json --timeout 120
+```
+
+Phase 4D acceptance should prove a one-command path from repo state to stakeholder briefing deck, LiveKit room creation, generated presenter audio, remote interruption handling, replay, evidence packet, and artifact secret scan. It must not require a human-created meeting link.
+
 ## Proposed Files
 
 Prefer adding new files instead of enlarging `room.py` further:
 
+- `skills/project-briefing-room/SKILL.md`: repo-versioned product skill entry point for install/call orchestration.
+- `skills/project-briefing-room/dependencies.md`: optional skill dependency map and installer guidance.
+- `src/devdefender_lab/briefing.py`: structured project briefing schema and code-agent adapter contract.
+- `src/devdefender_lab/briefing_deck.py`: non-technical briefing script, Mermaid/Slidev deck, and diagram rendering helpers.
 - `src/devdefender_lab/meeting.py`: provider-neutral contracts and redaction helpers.
 - `src/devdefender_lab/meeting_provisioner.py`: provider-neutral meeting creation contracts.
 - `src/devdefender_lab/media_router.py`: virtual audio/video route contracts.
 - `src/devdefender_lab/orchestrator.py`: managed process lifecycle helpers if existing scripts start duplicating logic.
+- `scripts/project_briefing_room_smoke.py`: Phase 4D one-command product briefing gate.
 - `scripts/meeting_automation_smoke.py`: Slice 3A gate.
 - `scripts/media_route_smoke.py`: Slice 3B gate.
 - `scripts/phase3_meeting_closure_smoke.py`: final Phase 3 closure gate.
 - `scripts/meeting_provisioner_smoke.py`: 3E AI-initiated meeting creation gate.
 - `scripts/livekit_browser_smoke.py`: accepts a provisioned LiveKit room/identity for the LiveKit-first gate.
+- `scripts/phase4_voice_defense_smoke.py`: first Phase 4 browser TTS/interruption/resume gate.
+- `scripts/phase4_livekit_tts_smoke.py`: Phase 4B generated TTS audio LiveKit publish gate.
+- `scripts/phase4_livekit_interruption_smoke.py`: Phase 4C LiveKit remote audio interruption gate.
 - `scripts/webrtc_meeting_smoke.py`: first 3C generic WebRTC gate.
 - `scripts/zoom_web_discovery_smoke.py`: 3C Zoom Web discovery gate.
+- `tests/test_briefing.py`
+- `tests/test_project_briefing_room_smoke.py`
 - `tests/test_meeting.py`
 - `tests/test_media_router.py`
 - `tests/test_meeting_automation_smoke.py`
 - `tests/test_phase3_meeting_closure_smoke.py`
 - `tests/test_meeting_provisioner.py`
 - `tests/test_meeting_provisioner_smoke.py`
+- `tests/test_phase4_voice_defense_smoke.py`
+- `tests/test_phase4_livekit_tts_smoke.py`
+- `tests/test_phase4_livekit_interruption_smoke.py`
 - `tests/test_zoom_web_discovery_smoke.py`
 
 ## Implementation Order
@@ -304,11 +460,17 @@ Prefer adding new files instead of enlarging `room.py` further:
 7. Add Phase 3 closure gate.
 8. Add meeting provisioner contracts, mock/local provisioning, and a provisioning smoke.
 9. Add LiveKit as the first real provider route after the mock/local provisioning gate is stable.
-10. Add Zoom/Tencent provisioners only after account permissions and credential handling are available.
+10. Defer Zoom/Tencent provisioners unless external SaaS integration becomes an explicit product requirement.
+11. Add the repo-versioned `project-briefing-room` skill skeleton and dependency manifest.
+12. Add structured briefing schemas and a mock code-agent adapter report.
+13. Add a non-technical briefing deck/script generator with Mermaid/Slidev diagram slots.
+14. Add the Phase 4D one-command Project Briefing Room smoke on the existing LiveKit path.
+15. Add optional skill-installer checks after the deterministic local gate is stable.
 
 ## Open Decisions
 
-- Next external SaaS provider step: Zoom provisioner plus guarded full join, or Tencent Meeting provisioner/discovery.
+- Product skill packaging: repo-local `skills/project-briefing-room` first, then `$CODEX_HOME/skills` install packaging.
+- First real code-agent adapter beyond mock: Codex-native structured report, OpenClaude CLI, or Aider.
 - Runtime base: native Windows, WSL/Linux, or Docker-first.
 - Media stack: PulseAudio, PipeWire, or browser fake-device only for the first pass.
 - Whether meeting screenshots are allowed as opt-in debug artifacts.

@@ -2,6 +2,28 @@
 
 Phase 1 integration lab for an AI code defense workflow. This repo intentionally keeps the surface small: parse a sample repo, persist a local code graph, generate a Slidev deck, call OpenAI for a defense answer, and extract a GitHub-Issue-shaped JSON payload from typed feedback.
 
+## Product Direction
+
+The next product path is `Project Briefing Room`: a lightweight skill-driven workflow that lets a code agent brief a human stakeholder on the current project state.
+
+- Default meeting path: AI-created LiveKit room, not a human-scheduled Zoom/Tencent meeting.
+- User-facing entry point: a repo-versioned `project-briefing-room` Codex skill.
+- Runtime responsibility: repo graph, stakeholder deck, Mermaid/Slidev diagrams, LiveKit room provisioning, generated presenter speech, remote interruption handling, replay, evidence packet, and secret scan.
+- Agent responsibility: provide structured briefing facts that can be translated from code language into architecture, progress, requirements coverage, experiment results, risks, questions, and next asks.
+- Optional helper skills can cover speech setup, transcription, Notion notes, security views, screenshots, browser validation, or PDFs, but the core path should stay minimal.
+
+Install the repo-versioned skill into VS Code Codex's default skill directory:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_project_briefing_room_skill.ps1
+```
+
+Then invoke it from Codex:
+
+```text
+[$project-briefing-room] 给我做一次当前项目汇报
+```
+
 ## Local Setup
 
 ```powershell

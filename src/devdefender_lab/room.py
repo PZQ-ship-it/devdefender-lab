@@ -12,6 +12,8 @@ import sys
 import threading
 import time
 import urllib.parse
+import wave
+from io import BytesIO
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -246,6 +248,15 @@ class RoomHandler(BaseHTTPRequestHandler):
         if parsed.path == "/zoom-discovery-test":
             self._send_html(_zoom_discovery_test_html())
             return
+        if parsed.path == "/voice-defense-test":
+            self._send_html(_voice_defense_test_html())
+            return
+        if parsed.path == "/livekit-tts-test":
+            self._send_html(_livekit_tts_test_html())
+            return
+        if parsed.path == "/livekit-interruption-test":
+            self._send_html(_livekit_interruption_test_html())
+            return
         if parsed.path == "/api/session":
             self._send_json(self.room.summary())
             return
@@ -279,6 +290,12 @@ class RoomHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/livekit-token":
             self._send_json(self._livekit_token_from_body(raw))
             return
+        if parsed.path == "/api/tts-audio":
+            try:
+                self._send_bytes(self._tts_audio_from_body(raw), "audio/wav")
+            except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
+                self._send_json({"ok": False, "error": str(exc)})
+            return
         if parsed.path == "/api/shutdown":
             self._send_json(self._shutdown_from_body(raw))
             return
@@ -304,6 +321,14 @@ class RoomHandler(BaseHTTPRequestHandler):
         body = html.encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_bytes(self, body: bytes, content_type: str) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -352,6 +377,11 @@ class RoomHandler(BaseHTTPRequestHandler):
         except (RuntimeError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
         return {"ok": True, **token.model_dump()}
+
+    def _tts_audio_from_body(self, raw: str) -> bytes:
+        payload = json.loads(raw or "{}")
+        command = str(payload.get("command") or "opening")
+        return _synthesize_tts_wav(command)
 
     def _shutdown_from_body(self, raw: str) -> dict[str, Any]:
         expected_token = os.getenv(ROOM_SHUTDOWN_TOKEN_ENV)
@@ -470,6 +500,85 @@ def _safe_timeline_command(kind: str, command: object) -> object:
     if isinstance(command, str) and kind.startswith("meeting_"):
         return redact_meeting_url(command)
     return command
+
+
+def _synthesize_tts_wav(command: str, *, sample_rate: int = 24000) -> bytes:
+    text_by_command = {
+        "opening": "DevDefender generated TTS audio is now published to the LiveKit room.",
+        "answer": "This answer is generated as speech and routed through the meeting audio track.",
+        "resume": "The defense continues with slide synchronized audio.",
+        "reviewer": "I need to interrupt here and ask how the defense handles this risk.",
+    }
+    text = text_by_command.get(command.strip().lower(), "DevDefender generated TTS audio.")
+    if os.name == "nt":
+        sapi_audio = _synthesize_windows_sapi_wav(text)
+        if sapi_audio:
+            return sapi_audio
+    return _synthesize_fallback_tone_wav(sample_rate=sample_rate)
+
+
+def _synthesize_windows_sapi_wav(text: str) -> bytes | None:
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        (
+            "Add-Type -AssemblyName System.Speech; "
+            "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+            "$m = New-Object System.IO.MemoryStream; "
+            "$s.SetOutputToWaveStream($m); "
+            "$s.Rate = 0; "
+            "$s.Volume = 100; "
+            "$s.Speak([Console]::In.ReadToEnd()); "
+            "$s.SetOutputToNull(); "
+            "[Console]::OutputEncoding = [System.Text.Encoding]::ASCII; "
+            "[Convert]::ToBase64String($m.ToArray())"
+        ),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            input=text,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=12,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    encoded = result.stdout.strip()
+    if result.returncode != 0 or not encoded:
+        return None
+    try:
+        audio = base64.b64decode(encoded, validate=True)
+    except ValueError:
+        return None
+    if not audio.startswith(b"RIFF") or b"WAVE" not in audio[:16]:
+        return None
+    return audio
+
+
+def _synthesize_fallback_tone_wav(*, sample_rate: int = 24000, duration_seconds: float = 0.9) -> bytes:
+    import math
+
+    frame_count = int(sample_rate * duration_seconds)
+    amplitude = 0.2 * 32767
+    with BytesIO() as buffer:
+        with wave.open(buffer, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(sample_rate)
+            frames = bytearray()
+            for index in range(frame_count):
+                envelope = min(1.0, index / (sample_rate * 0.08), (frame_count - index) / (sample_rate * 0.08))
+                value = int(amplitude * max(0.0, envelope) * math.sin(2 * math.pi * 220 * index / sample_rate))
+                frames.extend(value.to_bytes(2, byteorder="little", signed=True))
+            wav.writeframes(bytes(frames))
+        return buffer.getvalue()
 
 
 def main() -> None:
@@ -1753,6 +1862,775 @@ def _zoom_discovery_test_html() -> str:
 
     if (params.get('auto_zoom_discovery') === '1') {
       setTimeout(() => runZoomDiscovery(), 250);
+    }
+  </script>
+</body>
+</html>"""
+
+
+def _voice_defense_test_html() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DevDefender Voice Defense Test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; color: #17202a; background: #f8fafc; }
+    main { max-width: 760px; margin: 0 auto; }
+    button { border: 0; border-radius: 6px; padding: 10px 14px; background: #0f766e; color: white; font-weight: 700; }
+    .status { margin-top: 16px; padding: 12px; border: 1px solid #d7dde6; background: white; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>DevDefender Voice Defense Test</h1>
+    <button id="runButton" type="button">Run voice defense</button>
+    <div class="status" id="status">Idle.</div>
+  </main>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const statusEl = document.getElementById('status');
+    document.getElementById('runButton').addEventListener('click', runVoiceDefense);
+
+    async function runVoiceDefense() {
+      try {
+        statusEl.textContent = 'Opening explanation.';
+        await speakSegment('DevDefender opening explanation.', {
+          startCommand: 'opening',
+          anchorToken: 'next',
+          anchorOffsetMs: 220
+        });
+        statusEl.textContent = 'Interruption test burst.';
+        await runInterruptionBurst();
+        statusEl.textContent = 'Answering interruption.';
+        await speakSegment('Answering reviewer interruption.', {
+          startCommand: 'answer',
+          anchorToken: null,
+          anchorOffsetMs: 180
+        });
+        statusEl.textContent = 'Resuming explanation.';
+        await speakSegment('Continuing defense explanation.', {
+          startCommand: 'resume',
+          anchorToken: 'next',
+          anchorOffsetMs: 260
+        });
+        statusEl.textContent = 'Voice defense complete.';
+      } catch (error) {
+        statusEl.textContent = error.message || String(error);
+        await recordTimelineEvent({
+          kind: 'livekit_error',
+          source: 'browser-voice-defense',
+          command: `voice-defense:${error.message || error}`
+        });
+      }
+    }
+
+    async function speakSegment(text, options) {
+      await recordTimelineEvent({
+        kind: 'speech_started',
+        source: 'browser-voice-defense',
+        command: options.startCommand,
+        confidence: 1,
+        offset_ms: 0
+      });
+      await browserSpeak(text);
+      if (options.anchorToken) {
+        await delay(options.anchorOffsetMs || 0);
+        await recordTimelineEvent({
+          kind: 'tts_word',
+          source: 'browser-voice-defense',
+          token: options.anchorToken,
+          confidence: 1,
+          offset_ms: options.anchorOffsetMs || 0
+        });
+      }
+    }
+
+    function browserSpeak(text) {
+      return new Promise((resolve) => {
+        if (!('speechSynthesis' in window) || !window.SpeechSynthesisUtterance) {
+          resolve();
+          return;
+        }
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 1.1;
+        utterance.volume = 0;
+        let resolved = false;
+        const done = () => {
+          if (!resolved) {
+            resolved = true;
+            resolve();
+          }
+        };
+        utterance.onend = done;
+        utterance.onerror = done;
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(utterance);
+        setTimeout(done, 700);
+      });
+    }
+
+    async function runInterruptionBurst() {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (AudioContextClass) {
+        const context = new AudioContextClass();
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.frequency.value = 440;
+        gain.gain.value = 0.3;
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start();
+        await delay(120);
+        oscillator.stop();
+        await context.close();
+      } else {
+        await delay(120);
+      }
+      await recordTimelineEvent({
+        kind: 'speech_started',
+        source: 'browser-voice-interruption',
+        command: 'reviewer-question',
+        confidence: 0.88,
+        offset_ms: 0
+      });
+      await recordTimelineEvent({
+        kind: 'speech_interrupted',
+        source: 'browser-voice-interruption',
+        confidence: 0.96,
+        offset_ms: 120
+      });
+    }
+
+    async function recordTimelineEvent(payload) {
+      const response = await fetch('/api/timeline-event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!result.ok) {
+        throw new Error(result.error || 'Timeline event failed.');
+      }
+      return result;
+    }
+
+    function delay(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    if (params.get('auto_voice_defense') === '1') {
+      setTimeout(() => runVoiceDefense(), 250);
+    }
+  </script>
+</body>
+</html>"""
+
+
+def _livekit_tts_test_html() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DevDefender LiveKit TTS Test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; color: #17202a; background: #f8fafc; }
+    main { max-width: 760px; margin: 0 auto; }
+    button { border: 0; border-radius: 6px; padding: 10px 14px; background: #0f766e; color: white; font-weight: 700; }
+    input { box-sizing: border-box; width: 100%; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px 12px; }
+    label { display: block; margin: 12px 0 6px; font-weight: 700; }
+    .status { margin-top: 16px; padding: 12px; border: 1px solid #d7dde6; background: white; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>DevDefender LiveKit TTS Test</h1>
+    <label for="livekitRoom">LiveKit room</label>
+    <input id="livekitRoom" type="text" value="devdefender-phase4b">
+    <label for="livekitIdentity">LiveKit identity</label>
+    <input id="livekitIdentity" type="text" value="devdefender-livekit-tts">
+    <button id="runButton" type="button">Publish TTS audio</button>
+    <div class="status" id="status">Idle.</div>
+  </main>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const statusEl = document.getElementById('status');
+    const livekitRoomEl = document.getElementById('livekitRoom');
+    const livekitIdentityEl = document.getElementById('livekitIdentity');
+    const livekitSdkUrl = 'https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.esm.mjs';
+    let livekitModulePromise = null;
+    document.getElementById('runButton').addEventListener('click', runLiveKitTts);
+
+    async function runLiveKitTts() {
+      let room = null;
+      let tts = null;
+      try {
+        statusEl.textContent = 'Requesting LiveKit token.';
+        const tokenPayload = await requestLiveKitToken();
+        statusEl.textContent = 'Loading LiveKit client.';
+        const LiveKit = await loadLiveKitModule();
+        room = new LiveKit.Room({ adaptiveStream: true, dynacast: true });
+        room.on(LiveKit.RoomEvent.Disconnected, () => {
+          recordTimelineEvent({ kind: 'livekit_disconnected', source: 'browser-livekit-tts', command: tokenPayload.room_name });
+        });
+
+        statusEl.textContent = 'Connecting to LiveKit.';
+        await room.connect(tokenPayload.url, tokenPayload.token);
+        await recordTimelineEvent({ kind: 'livekit_connected', source: 'browser-livekit-tts', command: tokenPayload.room_name });
+
+        tts = await createGeneratedTtsAudioTrack();
+        await recordTimelineEvent({
+          kind: 'tts_audio_track_created',
+          source: 'browser-livekit-tts',
+          command: 'sapi-wav-media-stream',
+          confidence: 1,
+          offset_ms: 0
+        });
+
+        await room.localParticipant.publishTrack(tts.track, { name: 'devdefender-tts-audio' });
+        await recordTimelineEvent({
+          kind: 'tts_audio_track_published',
+          source: 'browser-livekit-tts',
+          command: tokenPayload.identity,
+          confidence: 1,
+          offset_ms: 0
+        });
+
+        statusEl.textContent = 'Publishing generated TTS segment.';
+        await speakAndPublishSegment(tts, {
+          speechCommand: 'opening',
+          anchorToken: 'next',
+          anchorOffsetMs: 260,
+          durationMs: 900
+        });
+        await delay(250);
+        statusEl.textContent = 'LiveKit TTS publish complete.';
+      } catch (error) {
+        statusEl.textContent = error.message || String(error);
+        await recordTimelineEvent({
+          kind: 'livekit_error',
+          source: 'browser-livekit-tts',
+          command: `livekit-tts:${error.message || error}`
+        });
+      } finally {
+        if (tts) {
+          await stopGeneratedTtsAudioTrack(tts);
+        }
+        if (room) {
+          room.disconnect();
+        }
+      }
+    }
+
+    async function requestLiveKitToken() {
+      const response = await fetch('/api/livekit-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          room: livekitRoomEl.value,
+          identity: livekitIdentityEl.value
+        })
+      });
+      const payload = await response.json();
+      if (!payload.ok) {
+        throw new Error(payload.error || 'LiveKit token request failed.');
+      }
+      return payload;
+    }
+
+    async function loadLiveKitModule() {
+      if (!livekitModulePromise) {
+        livekitModulePromise = import(livekitSdkUrl);
+      }
+      return livekitModulePromise;
+    }
+
+    async function createGeneratedTtsAudioTrack() {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) {
+        throw new Error('Web Audio is unavailable.');
+      }
+      const context = new AudioContextClass();
+      const destination = context.createMediaStreamDestination();
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.value = 220;
+      gain.gain.value = 0;
+      oscillator.connect(gain);
+      gain.connect(destination);
+      oscillator.start();
+      await context.resume();
+      const track = destination.stream.getAudioTracks()[0];
+      if (!track) {
+        throw new Error('No generated TTS audio track.');
+      }
+      track.enabled = true;
+      return { context, destination, oscillator, gain, track };
+    }
+
+    async function speakAndPublishSegment(tts, options) {
+      await recordTimelineEvent({
+        kind: 'speech_started',
+        source: 'browser-livekit-tts',
+        command: options.speechCommand,
+        confidence: 1,
+        offset_ms: 0
+      });
+      await Promise.all([
+        browserSpeak(options.speechCommand),
+        playGeneratedTtsAudio(tts, options.speechCommand, options.durationMs || 800)
+      ]);
+      if (options.anchorToken) {
+        await delay(options.anchorOffsetMs || 0);
+        await recordTimelineEvent({
+          kind: 'tts_word',
+          source: 'browser-livekit-tts',
+          token: options.anchorToken,
+          confidence: 1,
+          offset_ms: options.anchorOffsetMs || 0
+        });
+      }
+    }
+
+    async function playGeneratedTtsAudio(tts, command, fallbackDurationMs) {
+      await tts.context.resume();
+      const audioBuffer = await fetchTtsAudioBuffer(tts.context, command);
+      if (audioBuffer) {
+        const source = tts.context.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(tts.gain);
+        tts.gain.gain.setValueAtTime(0.95, tts.context.currentTime);
+        source.start();
+        await new Promise((resolve) => {
+          source.onended = resolve;
+        });
+        tts.gain.gain.setValueAtTime(0, tts.context.currentTime);
+        return;
+      }
+      const start = tts.context.currentTime;
+      const end = start + fallbackDurationMs / 1000;
+      tts.gain.gain.cancelScheduledValues(start);
+      tts.gain.gain.setValueAtTime(0, start);
+      for (let time = start; time < end; time += 0.14) {
+        tts.gain.gain.linearRampToValueAtTime(0.08, time + 0.03);
+        tts.gain.gain.linearRampToValueAtTime(0.015, time + 0.1);
+      }
+      tts.gain.gain.linearRampToValueAtTime(0, end);
+      await delay(fallbackDurationMs);
+    }
+
+    async function fetchTtsAudioBuffer(context, command) {
+      const response = await fetch('/api/tts-audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command })
+      });
+      const contentType = response.headers.get('content-type') || '';
+      if (!response.ok || !contentType.includes('audio/wav')) {
+        return null;
+      }
+      const data = await response.arrayBuffer();
+      return await context.decodeAudioData(data);
+    }
+
+    function browserSpeak(command) {
+      return new Promise((resolve) => {
+        if (!('speechSynthesis' in window) || !window.SpeechSynthesisUtterance) {
+          resolve();
+          return;
+        }
+        const spokenLabels = {
+          opening: 'DevDefender generated TTS audio is now published to the LiveKit room.'
+        };
+        const utterance = new SpeechSynthesisUtterance(spokenLabels[command] || 'DevDefender generated TTS audio.');
+        utterance.rate = 1.05;
+        utterance.volume = 0.05;
+        let resolved = false;
+        const done = () => {
+          if (!resolved) {
+            resolved = true;
+            resolve();
+          }
+        };
+        utterance.onend = done;
+        utterance.onerror = done;
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(utterance);
+        setTimeout(done, 900);
+      });
+    }
+
+    async function stopGeneratedTtsAudioTrack(tts) {
+      try {
+        tts.gain.gain.setValueAtTime(0, tts.context.currentTime);
+        tts.oscillator.stop();
+      } catch (_) {
+      }
+      tts.track.stop();
+      await tts.context.close();
+    }
+
+    async function recordTimelineEvent(payload) {
+      const response = await fetch('/api/timeline-event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!result.ok) {
+        throw new Error(result.error || 'Timeline event failed.');
+      }
+      return result;
+    }
+
+    function delay(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    if (params.get('livekit_room')) {
+      livekitRoomEl.value = params.get('livekit_room');
+    }
+    if (params.get('livekit_identity')) {
+      livekitIdentityEl.value = params.get('livekit_identity');
+    }
+    if (params.get('auto_livekit_tts') === '1') {
+      if (!params.get('livekit_identity')) {
+        livekitIdentityEl.value = `devdefender-livekit-tts-${Date.now()}`;
+      }
+      setTimeout(() => runLiveKitTts(), 250);
+    }
+  </script>
+</body>
+</html>"""
+
+
+def _livekit_interruption_test_html() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DevDefender LiveKit Interruption Test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; color: #17202a; background: #f8fafc; }
+    main { max-width: 760px; margin: 0 auto; }
+    button { border: 0; border-radius: 6px; padding: 10px 14px; background: #0f766e; color: white; font-weight: 700; }
+    input { box-sizing: border-box; width: 100%; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px 12px; }
+    label { display: block; margin: 12px 0 6px; font-weight: 700; }
+    .status { margin-top: 16px; padding: 12px; border: 1px solid #d7dde6; background: white; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>DevDefender LiveKit Interruption Test</h1>
+    <label for="livekitRoom">LiveKit room</label>
+    <input id="livekitRoom" type="text" value="devdefender-phase4c">
+    <label for="detectorIdentity">Detector identity</label>
+    <input id="detectorIdentity" type="text" value="devdefender-livekit-detector">
+    <label for="reviewerIdentity">Reviewer identity</label>
+    <input id="reviewerIdentity" type="text" value="devdefender-livekit-reviewer">
+    <button id="runButton" type="button">Detect remote interruption</button>
+    <div class="status" id="status">Idle.</div>
+  </main>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const statusEl = document.getElementById('status');
+    const livekitRoomEl = document.getElementById('livekitRoom');
+    const detectorIdentityEl = document.getElementById('detectorIdentity');
+    const reviewerIdentityEl = document.getElementById('reviewerIdentity');
+    const livekitSdkUrl = 'https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.esm.mjs';
+    let livekitModulePromise = null;
+    document.getElementById('runButton').addEventListener('click', runLiveKitInterruption);
+
+    async function runLiveKitInterruption() {
+      let detectorRoom = null;
+      let reviewerRoom = null;
+      let reviewerAudio = null;
+      try {
+        statusEl.textContent = 'Requesting LiveKit tokens.';
+        const detectorToken = await requestLiveKitToken(detectorIdentityEl.value);
+        const reviewerToken = await requestLiveKitToken(reviewerIdentityEl.value);
+        const LiveKit = await loadLiveKitModule();
+        await recordTimelineEvent({
+          kind: 'manual_voice_command',
+          source: 'browser-livekit-remote-interruption',
+          command: 'goto',
+          slide_index: 1,
+          confidence: 1,
+          offset_ms: 0
+        });
+
+        detectorRoom = new LiveKit.Room({ adaptiveStream: true, dynacast: true });
+        reviewerRoom = new LiveKit.Room({ adaptiveStream: true, dynacast: true });
+        const remoteTrackPromise = waitForRemoteAudioTrack(detectorRoom, LiveKit);
+
+        statusEl.textContent = 'Connecting detector participant.';
+        await detectorRoom.connect(detectorToken.url, detectorToken.token);
+        await recordTimelineEvent({
+          kind: 'livekit_connected',
+          source: 'browser-livekit-interruption-detector',
+          command: detectorToken.room_name
+        });
+
+        statusEl.textContent = 'Connecting reviewer participant.';
+        await reviewerRoom.connect(reviewerToken.url, reviewerToken.token);
+        await recordTimelineEvent({
+          kind: 'livekit_connected',
+          source: 'browser-livekit-reviewer',
+          command: reviewerToken.room_name
+        });
+
+        reviewerAudio = await createReviewerAudioTrack();
+        await reviewerRoom.localParticipant.publishTrack(reviewerAudio.track, { name: 'devdefender-reviewer-interruption' });
+        await recordTimelineEvent({
+          kind: 'audio_track_published',
+          source: 'browser-livekit-reviewer',
+          command: reviewerToken.identity,
+          confidence: 1,
+          offset_ms: 0
+        });
+
+        statusEl.textContent = 'Waiting for detector subscription.';
+        const remoteTrack = await remoteTrackPromise;
+        const remoteDetection = detectSpeechFromRemoteTrack(remoteTrack);
+        await delay(300);
+        statusEl.textContent = 'Publishing reviewer interruption audio.';
+        await playReviewerInterruption(reviewerAudio);
+        await remoteDetection;
+        statusEl.textContent = 'Remote interruption detected.';
+      } catch (error) {
+        statusEl.textContent = error.message || String(error);
+        await recordTimelineEvent({
+          kind: 'livekit_error',
+          source: 'browser-livekit-interruption-detector',
+          command: `livekit-interruption:${error.message || error}`
+        });
+      } finally {
+        if (reviewerAudio) {
+          await stopReviewerAudioTrack(reviewerAudio);
+        }
+        if (reviewerRoom) {
+          reviewerRoom.disconnect();
+        }
+        if (detectorRoom) {
+          detectorRoom.disconnect();
+        }
+      }
+    }
+
+    async function requestLiveKitToken(identity) {
+      const response = await fetch('/api/livekit-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room: livekitRoomEl.value, identity })
+      });
+      const payload = await response.json();
+      if (!payload.ok) {
+        throw new Error(payload.error || 'LiveKit token request failed.');
+      }
+      return payload;
+    }
+
+    async function loadLiveKitModule() {
+      if (!livekitModulePromise) {
+        livekitModulePromise = import(livekitSdkUrl);
+      }
+      return livekitModulePromise;
+    }
+
+    function waitForRemoteAudioTrack(room, LiveKit) {
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Remote reviewer audio subscription timed out.')), 15000);
+        room.on(LiveKit.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+          if (track.kind !== LiveKit.Track.Kind.Audio) {
+            return;
+          }
+          if (!String(participant.identity || '').includes('reviewer')) {
+            return;
+          }
+          clearTimeout(timeout);
+          resolve(track);
+        });
+      });
+    }
+
+    async function detectSpeechFromRemoteTrack(track) {
+      const element = track.attach();
+      element.autoplay = true;
+      element.muted = false;
+      element.volume = 1;
+      element.style.display = 'none';
+      document.body.appendChild(element);
+      try {
+        await element.play();
+      } catch (_) {
+      }
+      const capturedStream = element.captureStream ? element.captureStream() : null;
+      const mediaStreamTrack = capturedStream && capturedStream.getAudioTracks().length
+        ? capturedStream.getAudioTracks()[0]
+        : track.mediaStreamTrack;
+      if (!mediaStreamTrack) {
+        throw new Error('Subscribed remote audio track has no MediaStreamTrack.');
+      }
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) {
+        throw new Error('Web Audio is unavailable.');
+      }
+      const context = new AudioContextClass();
+      const stream = new MediaStream([mediaStreamTrack]);
+      const source = context.createMediaStreamSource(stream);
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 1024;
+      source.connect(analyser);
+      await context.resume();
+      const samples = new Float32Array(analyser.fftSize);
+      const start = performance.now();
+      let speechStarted = false;
+      let peak = 0;
+      while (performance.now() - start < 6000) {
+        analyser.getFloatTimeDomainData(samples);
+        const rms = rootMeanSquare(samples);
+        peak = Math.max(peak, rms);
+        if (!speechStarted && rms > 0.012) {
+          speechStarted = true;
+          await recordTimelineEvent({
+            kind: 'speech_started',
+            source: 'browser-livekit-remote-interruption',
+            command: 'remote-reviewer-audio',
+            confidence: Math.min(1, rms * 12),
+            offset_ms: Math.round(performance.now() - start)
+          });
+        }
+        if (speechStarted && rms > 0.018) {
+          await recordTimelineEvent({
+            kind: 'speech_interrupted',
+            source: 'browser-livekit-remote-interruption',
+            confidence: Math.min(1, Math.max(0.82, rms * 18)),
+            offset_ms: Math.round(performance.now() - start)
+          });
+          await context.close();
+          track.detach(element);
+          element.remove();
+          return;
+        }
+        await delay(40);
+      }
+      await context.close();
+      track.detach(element);
+      element.remove();
+      throw new Error(`No remote speech interruption detected. peak=${peak.toFixed(4)}`);
+    }
+
+    async function createReviewerAudioTrack() {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) {
+        throw new Error('Web Audio is unavailable.');
+      }
+      const context = new AudioContextClass();
+      const destination = context.createMediaStreamDestination();
+      const gain = context.createGain();
+      gain.gain.value = 0;
+      gain.connect(destination);
+      await context.resume();
+      const track = destination.stream.getAudioTracks()[0];
+      if (!track) {
+        throw new Error('No reviewer audio track.');
+      }
+      return { context, destination, gain, track };
+    }
+
+    async function playReviewerInterruption(audio) {
+      await audio.context.resume();
+      const buffer = await fetchTtsAudioBuffer(audio.context, 'reviewer');
+      if (buffer) {
+        audio.gain.gain.setValueAtTime(1, audio.context.currentTime);
+        for (let index = 0; index < 2; index += 1) {
+          const source = audio.context.createBufferSource();
+          source.buffer = buffer;
+          source.connect(audio.gain);
+          source.start();
+          await new Promise((resolve) => {
+            source.onended = resolve;
+          });
+          await delay(150);
+        }
+        audio.gain.gain.setValueAtTime(0, audio.context.currentTime);
+        return;
+      }
+      const oscillator = audio.context.createOscillator();
+      oscillator.frequency.value = 330;
+      oscillator.connect(audio.gain);
+      audio.gain.gain.setValueAtTime(0.08, audio.context.currentTime);
+      oscillator.start();
+      await delay(900);
+      oscillator.stop();
+      audio.gain.gain.setValueAtTime(0, audio.context.currentTime);
+    }
+
+    async function fetchTtsAudioBuffer(context, command) {
+      const response = await fetch('/api/tts-audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command })
+      });
+      const contentType = response.headers.get('content-type') || '';
+      if (!response.ok || !contentType.includes('audio/wav')) {
+        return null;
+      }
+      const data = await response.arrayBuffer();
+      return await context.decodeAudioData(data);
+    }
+
+    async function stopReviewerAudioTrack(audio) {
+      audio.track.stop();
+      await audio.context.close();
+    }
+
+    async function recordTimelineEvent(payload) {
+      const response = await fetch('/api/timeline-event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!result.ok) {
+        throw new Error(result.error || 'Timeline event failed.');
+      }
+      return result;
+    }
+
+    function rootMeanSquare(samples) {
+      let sum = 0;
+      for (const sample of samples) {
+        sum += sample * sample;
+      }
+      return Math.sqrt(sum / samples.length);
+    }
+
+    function delay(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    if (params.get('livekit_room')) {
+      livekitRoomEl.value = params.get('livekit_room');
+    }
+    if (params.get('detector_identity')) {
+      detectorIdentityEl.value = params.get('detector_identity');
+    }
+    if (params.get('reviewer_identity')) {
+      reviewerIdentityEl.value = params.get('reviewer_identity');
+    }
+    if (params.get('auto_livekit_interruption') === '1') {
+      if (!params.get('detector_identity')) {
+        detectorIdentityEl.value = `devdefender-livekit-detector-${Date.now()}`;
+      }
+      if (!params.get('reviewer_identity')) {
+        reviewerIdentityEl.value = `devdefender-livekit-reviewer-${Date.now()}`;
+      }
+      setTimeout(() => runLiveKitInterruption(), 250);
     }
   </script>
 </body>

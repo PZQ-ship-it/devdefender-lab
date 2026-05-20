@@ -17,6 +17,7 @@ def test_phase3_meeting_closure_room_sequence_uses_one_managed_room(tmp_path: Pa
         room_url="http://127.0.0.1:9999",
         room_acceptance_out=tmp_path / "room.json",
         meeting_out=tmp_path / "meeting.json",
+        provisioner_out=tmp_path / "provisioner.json",
         media_out=tmp_path / "media.json",
         webrtc_out=tmp_path / "webrtc.json",
         zoom_out=tmp_path / "zoom.json",
@@ -28,6 +29,7 @@ def test_phase3_meeting_closure_room_sequence_uses_one_managed_room(tmp_path: Pa
     assert [step.name for step in steps] == [
         "room_acceptance",
         "meeting_automation",
+        "meeting_provisioner",
         "media_route",
         "webrtc_meeting",
         "zoom_web_discovery",
@@ -45,6 +47,20 @@ def test_phase3_meeting_closure_room_sequence_uses_one_managed_room(tmp_path: Pa
         "--out",
         str(tmp_path / "meeting.json"),
     ]
+    assert steps[2].command == [
+        sys.executable,
+        str(Path.cwd() / "scripts" / "meeting_provisioner_smoke.py"),
+        "--room-url",
+        "http://127.0.0.1:9999",
+        "--provider",
+        "livekit",
+        "--timeout",
+        "45.0",
+        "--out",
+        str(tmp_path / "provisioner.json"),
+    ]
+    assert steps[2].attempts == 3
+    assert steps[2].retry_delay == 3.0
 
 
 def test_phase3_meeting_closure_post_room_sequence_defaults_to_pytest(tmp_path: Path) -> None:
@@ -76,17 +92,25 @@ def test_phase3_meeting_closure_report_requires_all_meeting_media_sources() -> N
     results = [
         {"name": "room_acceptance", "ok": True, "payload": {"ok": True}},
         {"name": "meeting_automation", "ok": True, "payload": {"ok": True}},
+        {"name": "meeting_provisioner", "ok": True, "payload": {"ok": True}},
         {"name": "media_route", "ok": True, "payload": {"ok": True}},
         {"name": "webrtc_meeting", "ok": True, "payload": {"ok": True}},
         {"name": "zoom_web_discovery", "ok": True, "payload": {"ok": True}},
         {"name": "room_replay", "ok": True, "payload": {"ok": True, "thread_id": "thread-1"}},
         {"name": "evidence_packet", "ok": True, "payload": {"ok": True, "thread_id": "thread-1"}},
-        {"name": "phase3d_evidence_copy", "ok": True, "payload": {"ok": True, "evidence_count": 15}},
+        {"name": "phase3d_evidence_copy", "ok": True, "payload": {"ok": True, "evidence_count": 18}},
         {
             "name": "phase1_e2e",
             "ok": True,
             "payload": {
-                "issue": {"evidence": ["timeline://thread-1#event=4&kind=meeting_joined"]},
+                "issue": {
+                "evidence": [
+                    "timeline://thread-1#event=4&kind=meeting_joined",
+                    "timeline://thread-1#event=15&kind=meeting_created",
+                    "timeline://thread-1#event=16&kind=livekit_connected",
+                    "timeline://thread-1#event=17&kind=audio_track_published",
+                ]
+                },
                 "refinement": {"status": "verified"},
             },
         },
@@ -96,7 +120,10 @@ def test_phase3_meeting_closure_report_requires_all_meeting_media_sources() -> N
             "payload": {
                 "expected_pointers": [
                     "timeline://thread-1#event=4&kind=meeting_joined",
-                    "timeline://thread-1#event=8&kind=media_published",
+                    "timeline://thread-1#event=5&kind=media_published",
+                    "timeline://thread-1#event=15&kind=meeting_created",
+                    "timeline://thread-1#event=16&kind=livekit_connected",
+                    "timeline://thread-1#event=17&kind=audio_track_published",
                 ],
                 "counts": {"expected_pointers": 10},
                 "selection": {"selected_pointer_count": 10, "omitted_pointer_count": 20},
@@ -116,15 +143,19 @@ def test_phase3_meeting_closure_report_requires_all_meeting_media_sources() -> N
 
     assert report["ok"] is True
     assert report["cross_checks"]["local_meeting_lifecycle_in_packet_ok"] is True
+    assert report["cross_checks"]["livekit_provisioned_meeting_in_packet_ok"] is True
     assert report["cross_checks"]["media_route_events_in_packet_ok"] is True
     assert report["cross_checks"]["webrtc_events_in_packet_ok"] is True
     assert report["cross_checks"]["zoom_discovery_events_in_packet_ok"] is True
     assert report["evidence_packet"] == {
         "ok": True,
         "thread_id": "thread-1",
-        "evidence_count": 15,
+        "evidence_count": 18,
         "kinds": [
+            "audio_track_published",
+            "livekit_connected",
             "media_published",
+            "meeting_created",
             "meeting_join_started",
             "meeting_joined",
             "meeting_left",
@@ -137,6 +168,9 @@ def test_phase3_meeting_closure_report_requires_all_meeting_media_sources() -> N
         "selected_pointer_count": 10,
         "omitted_pointer_count": 20,
     }
+
+    assert report["cross_checks"]["livekit_pointers_in_evidence_chain_ok"] is True
+    assert report["cross_checks"]["livekit_pointers_in_issue_ok"] is True
 
 
 def test_phase3_meeting_closure_cross_checks_reject_missing_zoom_source() -> None:
@@ -156,6 +190,27 @@ def test_phase3_meeting_closure_cross_checks_reject_missing_zoom_source() -> Non
     )
 
     assert checks["zoom_discovery_events_in_packet_ok"] is False
+
+
+def test_phase3_meeting_closure_cross_checks_reject_missing_livekit_provisioner_source() -> None:
+    packet = _packet()
+    packet["evidence"] = [
+        item
+        for item in packet["evidence"]
+        if not (isinstance(item, dict) and item.get("source") in {"livekit-meeting-provisioner", "browser-livekit"})
+    ]
+
+    checks = build_cross_checks(
+        [
+            {"name": "room_replay", "payload": {"thread_id": "thread-1"}},
+            {"name": "evidence_packet", "payload": {"thread_id": "thread-1"}},
+            {"name": "artifact_secret", "payload": {"findings": []}},
+        ],
+        managed_room={"shutdown": {"ok": True, "used_terminate": False, "used_kill": False, "lingering_ports": []}},
+        evidence_packet=packet,
+    )
+
+    assert checks["livekit_provisioned_meeting_in_packet_ok"] is False
 
 
 def test_phase3_meeting_closure_duplicates_evidence_packet(tmp_path: Path) -> None:
@@ -196,6 +251,9 @@ def _packet() -> dict[str, object]:
         ("zoom-web-discovery", "meeting_join_started"),
         ("zoom-web-discovery", "meeting_joined"),
         ("zoom-web-discovery", "meeting_left"),
+        ("livekit-meeting-provisioner", "meeting_created"),
+        ("browser-livekit", "livekit_connected"),
+        ("browser-livekit", "audio_track_published"),
     ]
     return {
         "ok": True,

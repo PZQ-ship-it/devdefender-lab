@@ -149,6 +149,8 @@ def test_is_safe_evidence_pointer_enforces_pointer_grammar() -> None:
         "timeline://phase1:fallback_01#kind=audio_track_published&event=23",
         "timeline://thread-1#event=3&kind=meeting_created",
         "timeline://thread-1#event=4&kind=meeting_provision_failed",
+        "timeline://thread-1#event=5&kind=tts_audio_track_created",
+        "timeline://thread-1#event=6&kind=tts_audio_track_published",
         "timeline://thread-1#event=1&kind=meeting_joined",
         "timeline://thread-1#event=2&kind=media_published",
         "slide://thread-1#page=3",

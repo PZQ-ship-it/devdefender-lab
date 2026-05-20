@@ -236,6 +236,41 @@ C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\meeting_provi
 
 当前通过报告：`artifacts/meeting_provisioner_livekit_smoke.json`，`ok: true`，`teardown.command = livekit-room-deleted`。这条路线已经解决“AI 直接发起会议”而不是等待人工预定的问题；Zoom/Tencent 后续作为外部 SaaS provider 再接。
 
+### Phase 3D 更新：LiveKit provider 已纳入一键闭环默认路径
+
+`phase3_meeting_closure_smoke.py` 现在默认运行 `meeting_provisioner_smoke.py --provider livekit`，并要求同一条 room thread 同时包含：
+
+- `meeting_created`
+- `livekit_connected`
+- `audio_track_published`
+
+验收命令：
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\phase3_meeting_closure_smoke.py --skip-visual --out artifacts\phase3_meeting_closure_smoke.json --full-out artifacts\phase3_meeting_closure_smoke.full.json --provisioner-out artifacts\phase3d_meeting_provisioner_smoke.json --phase3d-evidence-out artifacts\evidence_packet_phase3d.json
+```
+
+当前通过报告：`artifacts/phase3_meeting_closure_smoke.json`，`ok: true`。本次闭环产生 34 个 replay-derived evidence events，`livekit_provisioned_meeting_in_packet_ok`、`livekit_pointers_in_evidence_chain_ok`、`livekit_pointers_in_issue_ok` 全部为 true，artifact secret scan 无发现。
+
+## Phase 4A 更新：浏览器 TTS 答辩流
+
+已实现第一条可验收的真实语音/答辩切片：
+
+- 新增 `/voice-defense-test` 专用页面。
+- 浏览器调用 Web Speech Synthesis 执行 opening、answer、resume 三段讲解。
+- 两个 `tts_word: next` 锚点通过既有 timeline-to-slide mapping 推动翻页两次。
+- Web Audio 测试脉冲模拟评委打断，记录 `speech_started` 与 `speech_interrupted`。
+- answer/resume 事件让 interruption state 回到 inactive。
+- 不保存 raw audio、audio path、full transcript 或 TTS 文本到普通 artifacts。
+
+验收命令：
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\phase4_voice_defense_smoke.py --managed-room --out artifacts\phase4_voice_defense_smoke.json --timeout 35
+```
+
+当前通过报告：`artifacts/phase4_voice_defense_smoke.json`，`ok: true`。Replay 通过，`artifacts/evidence_packet_phase4_voice_defense.json` 生成 7 条结构化 evidence events，artifact secret scan 无发现。
+
 当前 Phase 3D 已经证明：会议自动化事件、媒体路由事件、回放证据、Issue、Agent Task、agent trace、refinement、secret scan 和 pytest 可以在同一条 room thread 上闭环。但它仍然默认“会议链接已经存在”。下一步改为增加 Meeting Provisioner 层，让 AI 先创建会议，再交给 Meeting Adapter 入会。
 
 ### 新目标
@@ -304,3 +339,297 @@ C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\meeting_provi
 4. 增加 tests：contract、secret filtering、smoke report、Phase 3D compatibility。
 5. 更新 Phase 3D closure：可选包含 provisioner gate。
 6. 凭证准备好后，再实现 Zoom/Tencent 的真实 provider adapter。
+
+## Phase 4B update: LiveKit TTS audio track
+
+Implemented the first real generated-speech-to-LiveKit audio route:
+
+- Added `/api/tts-audio` to synthesize SAPI WAV bytes locally without writing the WAV into normal artifacts.
+- Added `/livekit-tts-test` to decode that WAV in the browser, route it through Web Audio, and publish the generated `MediaStreamTrack` to LiveKit.
+- Added structured timeline events `tts_audio_track_created` and `tts_audio_track_published`.
+- Added `scripts/phase4_livekit_tts_smoke.py` as the acceptance gate.
+- The smoke creates a LiveKit room, publishes the generated TTS audio track, emits `speech_started` and `tts_word: next`, advances one slide, deletes the LiveKit room, and keeps raw audio/transcript fields out of artifacts.
+
+Accepted command:
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\phase4_livekit_tts_smoke.py --managed-room --out artifacts\phase4_livekit_tts_smoke.json --timeout 75
+```
+
+Accepted report: `artifacts/phase4_livekit_tts_smoke.json`, `ok: true`.
+Replay passed with 6 timeline events and 1 mapped slide event on `phase1-cda26c6db47e`.
+Evidence packet: `artifacts/evidence_packet_phase4_livekit_tts.json`, 6 structured evidence events.
+Artifact secret scan: clean across 141 scanned files.
+
+## Phase 4C update: LiveKit remote audio interruption
+
+Implemented the first real remote-audio interruption route inside LiveKit:
+
+- Added `/livekit-interruption-test` to connect detector and reviewer participants to the same provisioned LiveKit room.
+- The reviewer participant publishes generated reviewer speech as a LiveKit audio track.
+- The detector participant subscribes to the reviewer track, attaches the remote audio element, captures the playback stream, and runs browser Web Audio RMS detection.
+- The page records `speech_started` and `speech_interrupted` from source `browser-livekit-remote-interruption`.
+- The smoke keeps raw audio/transcript fields out of artifacts and deletes the LiveKit room in teardown.
+
+Accepted command:
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\phase4_livekit_interruption_smoke.py --managed-room --out artifacts\phase4_livekit_interruption_smoke.json --timeout 90
+```
+
+Accepted report: `artifacts/phase4_livekit_interruption_smoke.json`, `ok: true`.
+Replay passed with 7 timeline events and 1 mapped slide event on `phase1-2a3c665978e9`.
+Evidence packet: `artifacts/evidence_packet_phase4_livekit_interruption.json`, 7 structured evidence events.
+Artifact secret scan: clean across 144 scanned files.
+
+## Product Direction Update: Project Briefing Room
+
+The next plan is to productize the accepted LiveKit room path as a lightweight project briefing workflow for code agents.
+
+Decision:
+
+- Default meeting path: LiveKit room created by the AI workflow.
+- Defer Zoom/Tencent/Teams/Google SaaS adapters unless external meeting integration becomes an explicit product requirement.
+- Product entry point: a repo-versioned Codex skill named `project-briefing-room`.
+- Product shape: thin skill orchestration plus deterministic local runtime.
+- Core user value: the code agent can brief a non-technical user like a meeting presenter, using architecture diagrams, progress/status, requirement coverage, experiment results, risks, open questions, and next asks.
+- Manual setup target: minimal configuration beyond repo checkout, Python environment, LiveKit credentials when using real room mode, and optional helper skill installation.
+
+Division of responsibility:
+
+- The `project-briefing-room` skill gathers repo/task context, asks a code-agent adapter for structured briefing data, optionally installs or calls helper skills, and launches the local runtime.
+- The local runtime owns graph/deck generation, Mermaid/Slidev assets, LiveKit provisioning, TTS audio publish, remote interruption detection, replay, evidence packets, and secret scanning.
+- Code agents integrate through a structured briefing JSON contract instead of directly operating meeting internals.
+
+Skill installer finding:
+
+- No existing skill fully covers project-status briefing plus diagrams plus LiveKit presentation plus evidence closure.
+- Reusable optional skills include `speech`, `transcribe`, `notion-meeting-intelligence`, `security-threat-model`, `security-ownership-map`, and already installed local `pdf`, `playwright`, and `screenshot`.
+- Figma skills are useful only if a UI/design handoff becomes part of the product, not for the core meeting briefing path.
+
+Next implementation order:
+
+1. Create `skills/project-briefing-room/SKILL.md` and `skills/project-briefing-room/dependencies.md`.
+2. Add `src/devdefender_lab/briefing.py` with the provider-neutral briefing schema and mock adapter output.
+3. Add `src/devdefender_lab/briefing_deck.py` to turn structured briefing data into stakeholder script, Mermaid diagram requests, and Slidev deck content.
+4. Add `scripts/project_briefing_room_smoke.py --managed-room --agent-backend mock`.
+5. Gate Phase 4D on repo state -> briefing deck -> LiveKit room -> generated presenter audio -> remote interruption -> replay/evidence packet -> artifact secret scan.
+
+Planned Phase 4D command:
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\project_briefing_room_smoke.py --managed-room --agent-backend mock --out artifacts\project_briefing_room_smoke.json --timeout 120
+```
+
+## Phase 4D-1 update: skill skeleton
+
+Created the repo-versioned product skill skeleton:
+
+- `skills/project-briefing-room/SKILL.md`
+- `skills/project-briefing-room/dependencies.md`
+- `skills/project-briefing-room/agents/openai.yaml`
+
+The skill is intentionally thin. It defines how a code agent should gather repo/task facts, translate them into a non-technical stakeholder briefing, optionally call helper skills, and delegate deterministic meeting/deck/evidence work to this repo runtime.
+
+Validation passed:
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe C:\Users\Administrator\.codex\skills\.system\skill-creator\scripts\quick_validate.py skills\project-briefing-room
+```
+
+Observed result: `Skill is valid!`
+
+Next implementation target: `src/devdefender_lab/briefing.py` with the provider-neutral briefing schema and mock adapter output.
+
+## Phase 4D-2 update: briefing schema and mock adapter
+
+Implemented the provider-neutral briefing contract:
+
+- `src/devdefender_lab/briefing.py`
+- `tests/test_briefing.py`
+
+The new contract includes:
+
+- `BriefingContext`
+- `ProjectBriefingReport`
+- diagram, progress, requirement, experiment, risk, stakeholder question, follow-up task, and evidence pointer models
+- `MockBriefingAdapter`
+- `default_briefing_context()`
+- `contains_forbidden_briefing_artifact_fields()`
+
+The mock adapter now produces a stable stakeholder briefing report that can be serialized as JSON and later consumed by the deck/runtime layer. It rejects unsafe evidence pointers and forbidden raw artifact fields such as tokens, API secrets, raw audio, full transcripts, cookies, local storage, unredacted meeting credentials, and audio file references.
+
+Accepted commands:
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe -m pytest tests\test_briefing.py -q
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe -m pytest tests\test_briefing.py tests\test_evidence.py -q
+```
+
+Accepted result: `7 passed` for briefing tests and `16 passed` for briefing plus evidence regression.
+
+Next implementation target: `src/devdefender_lab/briefing_deck.py` to turn `ProjectBriefingReport` into stakeholder script, Mermaid diagram requests, and Slidev deck content.
+
+## Phase 4D-3 update: briefing deck renderer
+
+Implemented the first deterministic renderer from `ProjectBriefingReport` to stakeholder-facing artifacts:
+
+- `src/devdefender_lab/briefing_deck.py`
+- `tests/test_briefing_deck.py`
+
+The renderer provides:
+
+- `BriefingDeckArtifact`
+- `render_briefing_deck(report)`
+- `write_briefing_deck(report, artifact_dir)`
+- `render_presenter_script(report)`
+
+Current output:
+
+- Slidev Markdown with title, stakeholder summary, Mermaid architecture diagram, progress, requirements coverage, experiment results, risks, stakeholder questions, next asks, and evidence pointers.
+- Presenter script suitable for later TTS/meeting narration.
+- Artifact metadata: `diagram_count`, `slide_count`, optional `deck_path`, and optional `script_path`.
+- Forbidden artifact-field protection using the same briefing detector.
+
+Accepted command:
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe -m pytest tests\test_briefing_deck.py tests\test_briefing.py -q
+```
+
+Accepted result: `11 passed`.
+
+Next implementation target: Phase 4D-4 `scripts/project_briefing_room_smoke.py --managed-room --agent-backend mock`, wiring mock briefing report -> briefing deck files -> existing LiveKit TTS/interruption gates.
+
+## Phase 4D-4 update: Project Briefing Room smoke
+
+Implemented the first one-command product smoke orchestrator:
+
+- `scripts/project_briefing_room_smoke.py`
+- `tests/test_project_briefing_room_smoke.py`
+
+The smoke now:
+
+- builds a mock `ProjectBriefingReport`
+- writes `artifacts/briefing_deck/briefing_report.json`
+- writes `artifacts/briefing_deck/slides.md`
+- writes `artifacts/briefing_deck/presenter_script.md`
+- verifies required deck sections and Mermaid presence
+- verifies product-level report summaries do not contain forbidden token/secret/raw audio/transcript fields
+- supports `--skip-livekit-gates` for no-credential local validation
+- can reuse the accepted Phase 4B and 4C LiveKit child gates when not skipped
+
+Accepted commands:
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe -m pytest tests\test_project_briefing_room_smoke.py tests\test_briefing_deck.py tests\test_briefing.py -q
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\project_briefing_room_smoke.py --skip-livekit-gates --out artifacts\project_briefing_room_smoke.skip_livekit.json
+```
+
+Accepted result: `18 passed`; skip-LiveKit product smoke report `ok: true`.
+
+Full LiveKit command when credentials are available:
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\project_briefing_room_smoke.py --managed-room --agent-backend mock --out artifacts\project_briefing_room_smoke.json --timeout 120
+```
+
+Next implementation target: run and accept the full LiveKit 4D smoke with local LiveKit credentials, then add evidence/replay/secret-scan closure around the product smoke.
+
+## Phase 4D-4 full LiveKit acceptance
+
+Accepted the full Project Briefing Room smoke with local LiveKit credentials loaded from `.env`.
+
+Accepted command:
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\project_briefing_room_smoke.py --managed-room --agent-backend mock --out artifacts\project_briefing_room_smoke.json --timeout 120
+```
+
+Accepted report: `artifacts/project_briefing_room_smoke.json`, `ok: true`.
+
+Observed result:
+
+- `briefing_artifacts`: `ok: true`
+- `livekit_tts`: `ok: true`, 6 new timeline events, including `meeting_created`, `livekit_connected`, `tts_audio_track_created`, `tts_audio_track_published`, `speech_started`, and `tts_word`
+- `livekit_interruption`: `ok: true`, 6 new timeline events, including `meeting_created`, two `livekit_connected` events, `audio_track_published`, `speech_started`, and `speech_interrupted`
+- managed room shutdown: `ok: true`, no terminate/kill fallback, no lingering ports
+- product report secret/raw artifact cross-check: `ok: true`
+
+Generated product artifacts:
+
+- `artifacts/briefing_deck/briefing_report.json`
+- `artifacts/briefing_deck/slides.md`
+- `artifacts/briefing_deck/presenter_script.md`
+- `artifacts/project_briefing_room_livekit_tts.json`
+- `artifacts/project_briefing_room_livekit_interruption.json`
+
+Next implementation target: add product-level evidence/replay/secret-scan closure around `project_briefing_room_smoke.py`.
+
+## Phase 4D-5 update: product closure gates
+
+Extended `scripts/project_briefing_room_smoke.py` with product-level closure gates:
+
+- `room_replay`
+- `evidence_packet`
+- `artifact_secret`
+
+New options:
+
+- `--skip-closure-gates`
+- `--evidence-packet-out`
+- `--secret-scan-out`
+
+Accepted full command:
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\project_briefing_room_smoke.py --managed-room --agent-backend mock --out artifacts\project_briefing_room_smoke.json --timeout 120
+```
+
+Accepted report: `artifacts/project_briefing_room_smoke.json`, `ok: true`.
+
+Observed closure result:
+
+- checks: `briefing_artifacts`, `livekit_tts`, `livekit_interruption`, `room_replay`, `evidence_packet`, and `artifact_secret` all true
+- replay thread: `phase1-0ac18eb0cf73`, 13 timeline events, 2 slide events, 2 mapped slide events
+- evidence packet: `artifacts/evidence_packet_project_briefing_room.json`, `ok: true`, same thread as replay
+- artifact secret scan: `artifacts/project_briefing_room_secret_scan.json`, `ok: true`, 153 scanned files, 3 loaded secret values, 0 findings
+- cross-checks confirmed required project events are present: `meeting_created`, `livekit_connected`, `tts_audio_track_published`, and `speech_interrupted`
+- managed room shutdown: `ok: true`, no terminate/kill fallback, no lingering ports
+
+Accepted regression:
+
+```powershell
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe -m pytest tests\test_project_briefing_room_smoke.py tests\test_briefing_deck.py tests\test_briefing.py tests\test_evidence.py -q
+```
+
+Accepted result: `29 passed`.
+
+Next implementation target: decide the first real code-agent briefing adapter beyond mock: Codex-native report, OpenClaude CLI, or Aider.
+
+## VS Code Codex skill install update
+
+Added a local installer for the repo-versioned `project-briefing-room` skill:
+
+- `scripts/install_project_briefing_room_skill.ps1`
+- `tests/test_install_project_briefing_room_skill.py`
+
+Accepted install command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_project_briefing_room_skill.ps1
+```
+
+Accepted result:
+
+- source: `skills/project-briefing-room`
+- target: `C:\Users\Administrator\.codex\skills\project-briefing-room`
+- validation: `Skill is valid!`
+
+VS Code Codex invocation:
+
+```text
+[$project-briefing-room] 给我做一次当前项目汇报
+```
+
+This makes the product path directly usable from the VS Code Codex plugin after one local install command.

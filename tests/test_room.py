@@ -12,7 +12,11 @@ from devdefender_lab.room import (
     Phase1Room,
     RoomHandler,
     _meeting_test_html,
+    _livekit_interruption_test_html,
+    _livekit_tts_test_html,
     _room_html,
+    _synthesize_tts_wav,
+    _voice_defense_test_html,
     _webrtc_meeting_test_html,
     _zoom_discovery_test_html,
 )
@@ -292,6 +296,37 @@ def test_room_http_api_issues_livekit_token_without_secret_leak_or_artifact(tmp_
     assert not (tmp_path / "livekit_token.json").exists()
 
 
+def test_room_http_api_returns_tts_wav_without_artifact(tmp_path: Path) -> None:
+    room = Phase1Room(Settings(llm_mode="mock", artifact_dir=tmp_path), Path("sample_repo"))
+    handler = type("TestRoomHandler", (RoomHandler,), {"room": room})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+
+    try:
+        payload = json.dumps({"command": "opening"}).encode("utf-8")
+        request = Request(
+            f"{base_url}/api/tts-audio",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        with urlopen(request, timeout=15) as response:
+            audio = response.read()
+            content_type = response.headers["Content-Type"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert content_type == "audio/wav"
+    assert audio.startswith(b"RIFF")
+    assert b"WAVE" in audio[:16]
+    assert not (tmp_path / "tts_audio.wav").exists()
+
+
 def test_room_http_api_livekit_token_fails_cleanly_without_credentials(tmp_path: Path) -> None:
     room = Phase1Room(Settings(llm_mode="mock", artifact_dir=tmp_path), Path("sample_repo"))
     handler = type("TestRoomHandler", (RoomHandler,), {"room": room})
@@ -452,6 +487,63 @@ def test_room_html_contains_livekit_browser_client_hooks(tmp_path: Path) -> None
     assert "manual-tts" in html
     assert "auto_meeting" in html
     assert "/meeting-test" in html
+
+
+def test_voice_defense_test_html_posts_tts_interruption_and_resume_events() -> None:
+    html = _voice_defense_test_html()
+
+    assert "DevDefender Voice Defense Test" in html
+    assert "speechSynthesis" in html
+    assert "SpeechSynthesisUtterance" in html
+    assert "browser-voice-defense" in html
+    assert "browser-voice-interruption" in html
+    assert "speech_started" in html
+    assert "tts_word" in html
+    assert "speech_interrupted" in html
+    assert "auto_voice_defense" in html
+
+
+def test_livekit_tts_test_html_publishes_generated_tts_audio_track() -> None:
+    html = _livekit_tts_test_html()
+
+    assert "DevDefender LiveKit TTS Test" in html
+    assert "https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.esm.mjs" in html
+    assert "/api/livekit-token" in html
+    assert "/api/tts-audio" in html
+    assert "decodeAudioData" in html
+    assert "createMediaStreamDestination" in html
+    assert "publishTrack(tts.track" in html
+    assert "browser-livekit-tts" in html
+    assert "tts_audio_track_created" in html
+    assert "tts_audio_track_published" in html
+    assert "speechSynthesis" in html
+    assert "auto_livekit_tts" in html
+
+
+def test_livekit_interruption_test_html_detects_remote_audio_track() -> None:
+    html = _livekit_interruption_test_html()
+
+    assert "DevDefender LiveKit Interruption Test" in html
+    assert "https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.esm.mjs" in html
+    assert "TrackSubscribed" in html
+    assert "captureStream" in html
+    assert "createMediaStreamSource" in html
+    assert "rootMeanSquare" in html
+    assert "browser-livekit-reviewer" in html
+    assert "browser-livekit-interruption-detector" in html
+    assert "browser-livekit-remote-interruption" in html
+    assert "manual_voice_command" in html
+    assert "command: 'goto'" in html
+    assert "speech_started" in html
+    assert "speech_interrupted" in html
+    assert "auto_livekit_interruption" in html
+
+
+def test_synthesize_tts_wav_returns_wav_bytes() -> None:
+    audio = _synthesize_tts_wav("opening")
+
+    assert audio.startswith(b"RIFF")
+    assert b"WAVE" in audio[:16]
 
 
 def test_meeting_test_html_posts_structured_meeting_events() -> None:
