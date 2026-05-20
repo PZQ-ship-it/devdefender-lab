@@ -32,6 +32,41 @@ class DefenseIssue(BaseModel):
     evidence: list[str]
 
 
+class AgentAcceptance(BaseModel):
+    must_write_test_first: bool = True
+    must_pass_existing_tests: bool = True
+    must_return_patch_only: bool = True
+
+
+class AgentTaskEnvelope(BaseModel):
+    issue: DefenseIssue
+    repo_commit_hash: str
+    graph_path: Path
+    allowed_paths: list[str]
+    required_tests: list[str]
+    evidence_pointers: list[str] = Field(default_factory=list)
+    acceptance: AgentAcceptance = Field(default_factory=AgentAcceptance)
+    agent_backend: str = "mock"
+
+
+class AgentRunReport(BaseModel):
+    backend: str
+    status: str
+    summary: str
+    changed_files: list[str] = Field(default_factory=list)
+    command: list[str] = Field(default_factory=list)
+    return_code: int | None = None
+    output: str = ""
+    violations: list[str] = Field(default_factory=list)
+    plan_path: Path | None = None
+    patch_path: Path | None = None
+    test_report_path: Path | None = None
+    trace_path: Path | None = None
+    workspace: Path | None = None
+    commit_hash: str | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
 class Phase1Status(StrEnum):
     WAITING_FOR_FEEDBACK = "waiting_for_feedback"
     ANSWERING = "answering"
@@ -59,6 +94,12 @@ class RefinementReport(BaseModel):
     output: str = ""
     changed_files: list[str] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
+    agent_backend: str = "mock"
+    agent_task_path: Path | None = None
+    agent_patch_path: Path | None = None
+    agent_test_report_path: Path | None = None
+    agent_trace_path: Path | None = None
+    violations: list[str] = Field(default_factory=list)
 
 
 class LabArtifacts(BaseModel):

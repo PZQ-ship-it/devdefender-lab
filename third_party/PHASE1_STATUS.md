@@ -1,6 +1,6 @@
 # Phase 1 Third-Party Status
 
-Generated from `scripts/third_party_smoke.py --phase 1` on 2026-05-11.
+Generated from `scripts/third_party_smoke.py --phase 1` on 2026-05-11. OpenClaude was added and smoke-tested on 2026-05-19.
 
 | Library | Category | Commit | Smoke | Status |
 | --- | --- | --- | --- | --- |
@@ -11,6 +11,7 @@ Generated from `scripts/third_party_smoke.py --phase 1` on 2026-05-11.
 | Slidev | presenter | `5e912cbc2d90bf406853b9c81243888dfc2842ea` | `npx slidev --version` | PASS |
 | Mermaid CLI | diagram | `f0c215ad3297ebafad4261fe5d3259461157a37e` | `node src/cli.js --version` | PASS |
 | Aider | refiner | `3ec8ec5a7d695b08a6c24fe6c0c235c8f87df9af` | `python -m aider.main --version` | PASS |
+| OpenClaude | code-agent | `f71e7692373a61d28c82fc3fadff3feaa4071ede` | `npx -y @gitlawb/openclaude --version` | PASS |
 
 ## Notes
 
@@ -18,3 +19,4 @@ Generated from `scripts/third_party_smoke.py --phase 1` on 2026-05-11.
 - Raw run reports live under `third_party/reports/` and are not committed.
 - `Memgraph`, `LiveKit Agents`, `WhisperX`, `Puppeteer`, and `Xvfb` are tracked in `manifest.yml` for later phases.
 - Mermaid CLI dependencies were installed inside its local clone with `PUPPETEER_SKIP_DOWNLOAD=true`; rendering diagrams with Chromium is still a later smoke.
+- OpenClaude's source clone is tracked under `third_party/src/openclaude`; the smoke uses the published npm CLI from the repo root because the source checkout requires Bun to build `dist/cli.mjs`.

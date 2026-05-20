@@ -10,6 +10,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import Command, interrupt
 
 from devdefender_lab.config import Settings
+from devdefender_lab.evidence import build_evidence_selection, write_evidence_selection
 from devdefender_lab.graph_store import create_graph_store
 from devdefender_lab.models import CodeGraphPayload, DefenseIssue, Phase1Interrupt, Phase1Status, RefinementReport
 from devdefender_lab.openai_client import draft_defense, extract_issue
@@ -69,11 +70,14 @@ def build_graph(settings: Settings, checkpointer: InMemorySaver | None = None):
         return {**state, "defense": answer}
 
     def issue(state: DefenseState) -> DefenseState:
-        extracted = extract_issue(settings, state["feedback"], state["defense"])
+        evidence_selection = build_evidence_selection(settings.artifact_dir)
+        write_evidence_selection(settings.artifact_dir, evidence_selection)
+        evidence_pointers = evidence_selection["selected_pointers"]
+        extracted = extract_issue(settings, state["feedback"], state["defense"], evidence_pointers=evidence_pointers)
         return {**state, "issue": extracted, "status": Phase1Status.REFINING.value}
 
     def refine(state: DefenseState) -> DefenseState:
-        report = run_tdad_refinement(Path(state["repo_path"]), state["issue"], settings.artifact_dir)
+        report = run_tdad_refinement(Path(state["repo_path"]), state["issue"], settings.artifact_dir, settings=settings)
         return {**state, "refinement": report, "status": Phase1Status.COMPLETE.value}
 
     graph.add_node("prepare", prepare)

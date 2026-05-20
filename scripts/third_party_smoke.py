@@ -119,8 +119,11 @@ def bring_up(item: dict[str, Any], clone_only: bool) -> Result:
 def clone_or_fetch(repo: str, path: Path, output_parts: list[str]) -> None:
     SRC_DIR.mkdir(parents=True, exist_ok=True)
     if path.exists():
-        result = run(["git", "-C", str(path), "fetch", "--depth", "1", "origin"], cwd=ROOT)
-        output_parts.append(result)
+        try:
+            result = run(["git", "-C", str(path), "fetch", "--depth", "1", "origin"], cwd=ROOT)
+            output_parts.append(result)
+        except RuntimeError as exc:
+            output_parts.append(f"Fetch failed; using existing clone.\n{exc}")
         return
     result = run(["git", "clone", "--depth", "1", repo, str(path)], cwd=ROOT)
     output_parts.append(result)
@@ -138,7 +141,8 @@ def run_smoke(smoke: dict[str, Any], path: Path, output_parts: list[str]) -> Non
         output_parts.append(run(command, cwd=ROOT))
         return
     if kind in {"command", "npm_exec"}:
-        output_parts.append(run_powershell(smoke["command"], cwd=path))
+        cwd = ROOT if smoke.get("cwd") == "root" else path
+        output_parts.append(run_powershell(smoke["command"], cwd=cwd))
         return
     raise ValueError(f"Unsupported smoke kind: {kind}")
 

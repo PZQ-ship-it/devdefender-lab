@@ -57,6 +57,15 @@ libraries:
       command: python -m aider.main --version
       optional_package: aider-chat
 
+  - name: openclaude
+    phase: 1
+    category: code-agent
+    repo: https://github.com/Gitlawb/openclaude.git
+    smoke:
+      kind: npm_exec
+      command: npx -y @gitlawb/openclaude --version
+      cwd: root
+
   - name: memgraph
     phase: 2
     category: graph-database

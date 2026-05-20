@@ -14,6 +14,7 @@ This folder tracks upstream libraries before DevDefender stitches them together.
 ```powershell
 C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\third_party_smoke.py --list
 C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\third_party_smoke.py --phase 1
+C:\ProgramData\Anaconda3\envs\devdefender-lab\python.exe .\scripts\third_party_smoke.py --name openclaude
 ```
 
 Use `--name <library>` to run a single library.
@@ -34,3 +35,5 @@ Mermaid CLI was verified from the local clone after installing clone-local npm d
 $env:PUPPETEER_SKIP_DOWNLOAD="true"
 npm install --prefix .\third_party\src\mermaid-cli --ignore-scripts --cache .\third_party\.npm-cache
 ```
+
+OpenClaude is cloned for source inspection, but its committed source tree needs Bun to build `dist/cli.mjs`. The Phase 1 smoke therefore verifies the published npm CLI from the repo root with `npx -y @gitlawb/openclaude --version`.

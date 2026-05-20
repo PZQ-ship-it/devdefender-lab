@@ -5,6 +5,7 @@ import json
 from openai import OpenAI
 
 from devdefender_lab.config import Settings
+from devdefender_lab.evidence import dedupe_strings
 from devdefender_lab.models import CodeGraphPayload, DefenseIssue
 
 
@@ -48,7 +49,8 @@ def draft_defense(settings: Settings, graph: CodeGraphPayload, feedback: str) ->
     return _create_text(settings, client, messages)
 
 
-def extract_issue(settings: Settings, feedback: str, defense: str) -> DefenseIssue:
+def extract_issue(settings: Settings, feedback: str, defense: str, evidence_pointers: list[str] | None = None) -> DefenseIssue:
+    pointers = dedupe_strings(evidence_pointers or [])
     if settings.llm_mode == "mock":
         return DefenseIssue(
             title="Add evidence for payment validation defense",
@@ -57,7 +59,7 @@ def extract_issue(settings: Settings, feedback: str, defense: str) -> DefenseIss
                 "Add or strengthen tests around validate_payment and capture_payment."
             ),
             labels=["devdefender", "phase-1", "test-coverage"],
-            evidence=[feedback, defense[:160]],
+            evidence=dedupe_strings([feedback, defense[:160], *pointers]),
         )
     client = require_openai_client(settings)
     messages = [
@@ -72,6 +74,8 @@ def extract_issue(settings: Settings, feedback: str, defense: str) -> DefenseIss
                 f"{feedback}\n\n"
                 "Defense answer:\n"
                 f"{defense}\n\n"
+                "Validated evidence pointers:\n"
+                f"{json.dumps(pointers, ensure_ascii=False)}\n\n"
                 "JSON schema: {\"title\": str, \"body\": str, \"labels\": [str], \"evidence\": [str]}"
             ),
         },
@@ -79,7 +83,8 @@ def extract_issue(settings: Settings, feedback: str, defense: str) -> DefenseIss
     raw = _create_text(settings, client, messages).strip()
     if raw.startswith("```"):
         raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    return DefenseIssue.model_validate_json(raw)
+    issue = DefenseIssue.model_validate_json(raw)
+    return issue.model_copy(update={"evidence": dedupe_strings([*issue.evidence, *pointers])})
 
 
 def _create_text(settings: Settings, client: OpenAI, messages: list[dict[str, str]]) -> str:

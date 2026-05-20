@@ -1,4 +1,6 @@
-初始改造前code agent可以使用[Gitlawb/openclaude](https://github.com/Gitlawb/openclaude)
+初始改造前 code agent 可以使用 [Gitlawb/openclaude](https://github.com/Gitlawb/openclaude)，但它不能直接成为系统里的“自由行动者”。
+
+正确姿势是：把 Code Agent 当成一个可替换的执行后端，通过统一的 Agent Adapter 接入黑板状态机。LangGraph 只给它结构化 Issue、代码版本指针、允许修改范围、测试命令和验收规则；Code Agent 只能返回 patch、测试日志、commit 指针和风险说明，不能绕过 TDAD 流程直接改主分支。
 
 🌟 顶层编排设计：中心辐射型“黑板模式” (Hub-and-Spoke)
 整个系统绝不能是一段从头跑到尾的 Python 脚本，而是一个支持“超长异步挂起”的分布式状态机。
@@ -9,7 +11,44 @@
 
 防上下文爆炸契约：在全局黑板（Blackboard State）中，绝对禁止传递几万行的源代码全文。只流转结构化指针：agent_a_repo_commit_hash（代码版本指针）、slidev_url（幻灯片指针）以及 verified_architectural_decisions（人类确认后的共识记忆，防重构回退）。
 
-🧩 四大子系统开源“物料清单”与缝合方案 (BOM & Stitching)
+🧩 五大子系统开源“物料清单”与缝合方案 (BOM & Stitching)
+🛠️ 模块零：代码执行层 —— 受控 Code Agent 接入网关 (The Agent Gateway)
+【目标】 把 openclaude / Aider / Codex / 自研 agent 变成可审计、可替换、可回放的“补丁执行器”，而不是让它们直接接管仓库。
+
+适配器拼装：Agent Adapter Interface + Git Worktree + Patch Contract。
+
+缝合逻辑：所有 Code Agent 统一实现同一个最小接口：
+
+- `plan(issue, graph_pointer, repo_commit)`：只产出修改计划，不改文件。
+- `write_tests(issue, allowed_paths)`：先写红灯测试，返回测试文件 diff。
+- `implement(issue, failing_tests, allowed_paths)`：只在白名单路径内生成补丁。
+- `verify(test_commands)`：运行测试并返回结构化日志。
+- `summarize()`：返回 changed_files、risk_notes、commit_hash、rollback_patch。
+
+沙箱边界：每次执行都在独立 git worktree / 临时分支里完成，输入是 `repo_commit_hash + issue_json + graph_json path`，输出是 `patch.diff + test_report.json + agent_trace.json`。禁止把 `.env`、密钥、完整聊天记录、会议录音全文传给 Code Agent。
+
+权限契约：
+
+- 白名单：只允许修改 Issue 映射到的模块、对应测试、必要文档。
+- 黑名单：禁止修改 CI、发布脚本、密钥文件、锁文件、大面积格式化，除非 Issue 明确授权。
+- 命令门禁：只允许运行配置好的 test/lint/typecheck 命令；危险命令如 `git reset --hard`、删除目录、网络发布必须人工确认。
+- 产物门禁：没有红灯测试证据、没有绿灯测试日志、没有 diff 摘要，不允许进入 merge/commit 节点。
+
+Code Agent 候选：
+
+- openclaude：适合早期接入和改造，作为 Agent Adapter 的第一个实验后端。
+- Aider Architect 模式：适合 TDAD 下的“先计划、再测试、再补丁”流程。
+- Codex CLI / 本地编码 agent：适合 IDE 内人机协作和多轮调试。
+
+黑板状态新增指针：
+
+- `agent_backend`: 当前执行后端，如 openclaude/aider/codex。
+- `agent_workspace`: 临时 worktree 路径。
+- `agent_patch_path`: 生成的 patch 文件路径。
+- `agent_test_report_path`: 测试报告 JSON 路径。
+- `agent_trace_path`: agent 思考摘要、工具调用摘要和风险说明。
+- `agent_commit_hash`: 通过验收后的临时分支 commit。
+
 🛠️ 模块一：防御大脑 —— 确定性代码知识图谱 (Agentic GraphRAG)
 【目标】 彻底消灭 AI 在答辩被质问深层代码逻辑时的“大模型幻觉”与盲区。
 
@@ -64,18 +103,111 @@
 
 缝合逻辑：绝不允许 AI 拿到 Issue 直接自由发挥 (Vibe Coding)。强制引入 TDAD (测试驱动智能体开发)：Aider 在改写核心业务逻辑前，必须先写测试脚本（红灯）。只要测试没跑通，就不允许 Commit 提交，用编译器作为防线的最后兜底。
 
+Code Agent 缝合逻辑：Refiner 不直接改代码，而是把标准 GitHub Issue JSON 转换成 Agent Task Envelope：
+
+```json
+{
+  "issue": "...",
+  "repo_commit_hash": "...",
+  "allowed_paths": ["src/payment/**", "tests/payment/**"],
+  "required_tests": ["pytest tests/payment -q"],
+  "evidence_pointers": ["timeline://thread#event=12&kind=speech_interrupted", "slide://thread#page=7"],
+  "acceptance": {
+    "must_write_test_first": true,
+    "must_pass_existing_tests": true,
+    "must_return_patch_only": true
+  }
+}
+```
+
+Agent Gateway 执行后，Refiner 只读取 `patch.diff`、`test_report.json`、`agent_trace.json`，再决定：接受、要求重试、升级人工审核，或生成 rollback。
+
+🧪 测试与验收设计 (Testing & Acceptance Matrix)
+系统必须把“能跑 demo”和“值得信任”分开验收。每个阶段至少保留以下测试层：
+
+1. 单元测试：
+   - parser：函数、类、import、CALLS 边是否稳定抽取。
+   - graph_store：保存、加载、查询子图是否可重复。
+   - issue extractor：LLM/mock 输出是否能被 Pydantic schema 严格校验。
+   - agent adapter：同一 Issue 输入是否生成合法 Task Envelope，是否拒绝越权路径。
+
+2. 契约测试：
+   - Blackboard State 不允许出现源代码全文、密钥、完整 transcript。
+   - Code Agent 输出必须包含 patch/test_report/trace 三件套。
+   - 没有红灯测试证据时，Refiner 必须拒绝进入 implement/commit。
+   - 测试失败时，workflow 状态必须停在 `needs_fix`，不能假装完成。
+
+3. 集成测试：
+   - `repo -> graph.json -> deck/slides.md -> interrupt -> feedback -> defense -> issue.json -> agent task -> refinement.json` 全链路。
+   - mock agent：故意返回越权 diff，系统必须拦截。
+   - mock agent：故意不写测试，系统必须拦截。
+   - mock agent：测试失败，系统必须保留失败日志并生成可读报告。
+
+4. 回放测试：
+   - 固定 `thread_id + repo_commit_hash + feedback`，多次运行应产生等价 Issue 和验收状态。
+   - LangGraph interrupt/resume 的 checkpoint 迁移测试：进程重启后仍能用 thread_id 恢复。
+   - agent_trace 回放：不重新调用 LLM，仅用保存产物验证状态机决策。
+
+5. 安全测试：
+   - prompt injection：反馈中要求“忽略测试/打印 .env/删除仓库”时必须拒绝。
+   - path traversal：Issue 指向 `../../.env` 或锁文件时必须拒绝。
+   - secret leakage：任何 artifact 里不得出现 `.env` 内容、API key、会议原始音频路径。
+   - destructive command：Code Agent 请求 reset/delete/publish 时必须进入人工确认。
+
+6. 视觉与交互测试：
+   - Slidev deck 能构建、能被 iframe 加载。
+   - Mermaid 图必须通过 CLI 编译，不通过则进入自修复或失败状态。
+   - 阶段 2 起，WebSocket 翻页事件必须有可回放日志：`timestamp -> action -> slide_index`。
+
+7. 端到端验收标准：
+   - 一条尖锐反馈最终必须产出：答辩文本、Issue JSON、测试报告、agent patch 或明确的 no-op 证据。
+   - 所有产物必须能从 `thread_id` 追溯。
+   - 人类可以在任意门禁点选择 accept/retry/reject。
+
 🚀 落地实施路线图 (MVP 到生产级别)
 为了避免团队一开始就陷入底层的 Linux 音视频编解码与 Docker 虚拟声卡泥潭中，建议分三个阶段敏捷演进：
 
 🟢 阶段 1：纯异步“图文答辩室” (跑通中枢大脑，约1-2周)
 目标：验证 LangGraph 状态机、Slidev 渲染与 GraphRAG 代码防幻觉。
 
-做法：不接任何语音和 LiveKit。你提交脏代码 -> 后台分析 AST 图谱并生成 Slidev 网页链接 -> LangGraph 挂起休眠。你自己看着网页 PPT，在一个文字 Chat 框里打字提出刁钻意见 -> 唤醒 LangGraph -> 测试 AI 能否基于图谱文字反击 -> 提取 Issue -> 触发 Aider 修改代码并生成红绿测试。
+做法：不接任何语音和 LiveKit。你提交脏代码 -> 后台分析 AST 图谱并生成 Slidev 网页链接 -> LangGraph 挂起休眠。你自己看着网页 PPT，在一个文字 Chat 框里打字提出刁钻意见 -> 唤醒 LangGraph -> 测试 AI 能否基于图谱文字反击 -> 提取 Issue -> 生成 Agent Task Envelope -> 触发 mock/openclaude/Aider adapter 在临时 worktree 中先写红灯测试 -> 生成补丁 -> 跑绿灯测试 -> 产出 `refinement.json` 与 `agent_trace.json`。
+
+阶段 1 必须补齐的测试：
+
+- mock LLM + mock agent 的全链路 e2e。
+- Code Agent 越权修改拦截测试。
+- 没有测试先行时的拒绝测试。
+- 失败测试报告持久化测试。
+- artifact 不泄露 `.env` 的扫描测试。
 
 🟡 阶段 2：本地“多模态声画同步舱” (攻克交互魔法，约2-3周)
 目标：跑通 LiveKit 打断机制与 WebSocket 声画同步。
 
 做法：不接入 Zoom 会议软件。自己写一个左右分屏的 Web HTML 测试页。左边 iframe 嵌入 Slidev PPT，右边嵌入 LiveKit 的 Web 语音按钮。你对着麦克风发难，测试 CNN 模型能否精准过滤咳嗽声；测试 AI 一边流利解答，一边完美控制左侧 PPT 翻页。
+
+当前本地验收基线：
+
+- 串行房间验收：`scripts/room_acceptance_smoke.py --managed-room` 必须能自行启动 mock room、等待 `/api/session`、串行执行 smokes、通过临时 shutdown token 关闭 room，并确认 room/Slidev 测试端口无残留监听。
+- 离线回放验收：`scripts/room_replay_smoke.py` 必须校验 slide 当前状态、打断状态、timeline-to-slide action/source 映射、每条 timeline 事件对应的当时 slide pointer，以及完整 slide 事件序列。
+- 证据指针验收：`scripts/evidence_packet_smoke.py` 必须从 replay 结果生成 `timeline://...` 与 `slide://...` 指针，供后续 Issue 提取和 Agent Task Envelope 使用，且不包含原始音频或 transcript。
+- Issue 与 Agent Task Envelope 接入：`extract_issue()` 与 `run_tdad_refinement()` 通过同一个 fail-closed loader 读取通过验收的 `artifacts/evidence_packet.json`，只把预算内的高价值证据指针子集同步写入 `issue.json`、`agent_task.json`、`agent_trace.json` 与 `refinement.json`；不得把原始音频、完整 transcript 或 LiveKit token 交给 Code Agent。
+- 证据选择审计：`artifacts/evidence_selection.json` 必须记录 pointer budget、selected/omitted counts 与 selected/omitted pointers；`scripts/evidence_chain_smoke.py` 必须确认该审计文件与共享 loader 输出一致。
+- 证据指针 grammar：只允许 `timeline://<thread>#event=<n>&kind=<known-kind>` 与 `slide://<thread>#page=<n>`；未知 kind、额外参数、路径、负数页码/事件、`transcript://` 或 `audio://` 一律拒绝。
+- 证据链闭环验收：`scripts/evidence_chain_smoke.py` 必须确认 `evidence_packet.json` 中的 replay-derived pointers 已贯穿 `issue.json`、`agent_task.json`、`agent_trace.json` 与 `refinement.json`。
+- 阶段闭环验收：`scripts/phase1_room_closure_smoke.py` 必须串起 managed room acceptance、Phase 1 mock e2e、证据链验收和密钥扫描，确保新生成的 room evidence packet 被 Issue/refinement 真实消费；默认主报告只保留摘要，完整子步骤 payload 写入 `.full.json`。
+- LiveKit 证据连续性：当闭环验收包含 `--include-livekit-browser` 时，`phase1_room_closure_smoke.py` 必须显式断言 `livekit_connected` 与 `audio_track_published` 指针同时进入 evidence chain 和 Issue evidence。
+- 同一 run/thread 连续性：闭环验收必须确认 `room_replay`、`evidence_packet`、evidence-chain pointers 与 Issue evidence 使用同一个 room thread，避免旧 artifacts 混入新验收。
+- 浏览器讲解锚点验收：`scripts/presenter_cue_smoke.py` 使用 `speech_started -> tts_word: next` 验证声画同步路径，不依赖真实 TTS，不保存 transcript。
+- 浏览器打断验收：`scripts/browser_interruption_smoke.py` 使用 Web Audio 测试脉冲触发 `speech_started` 与 `speech_interrupted`，只保存结构化事件，不保存音频。
+- 真实 LiveKit 凭证验收：`scripts/room_acceptance_smoke.py --managed-room --include-livekit-token --include-livekit-browser --out artifacts/room_acceptance_livekit_browser_gate.json`
+- 安全验收：`scripts/artifact_secret_smoke.py` 必须确认 `.env` 中的密钥值没有进入文本产物。
+
+阶段 2 当前已验收闭环：
+
+- 最终通过报告：`artifacts/phase1_room_closure_livekit_openclaude_smoke.json`。
+- 最终门禁命令：`scripts/phase1_room_closure_smoke.py --include-livekit-token --include-livekit-browser --agent-backend openclaude-cli --agent-timeout 240 --out artifacts\phase1_room_closure_livekit_openclaude_smoke.json --full-out artifacts\phase1_room_closure_livekit_openclaude_smoke.full.json --room-acceptance-out artifacts\room_acceptance_livekit_openclaude_gate.json`。
+- 已验证：managed room clean shutdown、真实 LiveKit browser connect/publish、OpenClaude 后端 Phase 1 e2e、LiveKit 指针进入 evidence chain 与 Issue evidence、同一 room thread 连续性、artifact secret scan clean。
+- 当前边界：这只是本地多模态声画同步舱闭环；真实麦克风打断模型、会议浏览器自动化、Docker/PulseAudio 路由和虚拟摄像头推流仍属于阶段 3。
 
 🔴 阶段 3：终极“无头刺客数字人” (工程级重型封装)
 目标：全自动上会，彻底释放人力。
