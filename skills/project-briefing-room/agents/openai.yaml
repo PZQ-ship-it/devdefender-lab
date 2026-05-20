@@ -1,7 +1,0 @@
-interface:
-  display_name: "Project Briefing Room"
-  short_description: "Brief stakeholders on repo status in an AI-run LiveKit meeting."
-  default_prompt: "Use $project-briefing-room to brief me on the current project status in a LiveKit meeting-style flow."
-
-policy:
-  allow_implicit_invocation: true

@@ -62,19 +62,7 @@ if (-not $NoValidate) {
     }
 }
 
-$InvocationHint = '[$project-briefing-room] ' + [string]::Concat(
-    [char]0x7ED9,
-    [char]0x6211,
-    [char]0x505A,
-    [char]0x4E00,
-    [char]0x6B21,
-    [char]0x5F53,
-    [char]0x524D,
-    [char]0x9879,
-    [char]0x76EE,
-    [char]0x6C47,
-    [char]0x62A5
-)
+$InvocationHint = 'Use $project-briefing-room to brief me and update the execution plan from my feedback.'
 
 $report = @{
     ok = $true

@@ -17,5 +17,5 @@ def test_install_project_briefing_room_skill_script_reports_invocation_hint() ->
     script = Path("scripts/install_project_briefing_room_skill.ps1").read_text(encoding="utf-8")
 
     assert "InvocationHint" in script
-    assert "[char]0x7ED9" in script
+    assert "Use $project-briefing-room to brief me and update the execution plan from my feedback." in script
     assert "ConvertTo-Json" in script

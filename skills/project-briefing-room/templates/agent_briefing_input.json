@@ -1,0 +1,23 @@
+{
+  "schema_version": "1",
+  "agent_kind": "generic",
+  "project_name": "",
+  "task_goal": "",
+  "current_task": "",
+  "changed_files": [],
+  "completed_work": [],
+  "in_progress_work": [],
+  "blockers": [],
+  "next_steps": [],
+  "requirements": [],
+  "tests": [],
+  "artifacts": [],
+  "architecture_facts": [],
+  "experiment_facts": [],
+  "risks": [],
+  "open_questions": [],
+  "constraints": [
+    "Do not include raw secrets, raw audio, full transcripts, cookies, or meeting start URLs."
+  ],
+  "evidence_pointers": []
+}

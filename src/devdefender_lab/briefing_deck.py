@@ -162,7 +162,7 @@ def _diagram_slides(report: ProjectBriefingReport) -> list[str]:
                     "flowchart LR",
                     "  Skill[Briefing skill] --> Runtime[DevDefender runtime]",
                     "  Runtime --> Deck[Stakeholder deck]",
-                    "  Runtime --> Room[LiveKit room]",
+                    "  Runtime --> Feedback[Stakeholder feedback plan]",
                     "```",
                 ]
             )
@@ -292,7 +292,7 @@ def _clean_mermaid(value: str | None) -> str:
                 "flowchart LR",
                 "  Skill[Briefing skill] --> Runtime[DevDefender runtime]",
                 "  Runtime --> Deck[Stakeholder deck]",
-                "  Runtime --> Room[LiveKit room]",
+                "  Runtime --> Feedback[Stakeholder feedback plan]",
             ]
         )
     cleaned = value.strip()

@@ -122,25 +122,38 @@ class BriefingFollowUpTask(BriefingBaseModel):
 class BriefingContext(BriefingBaseModel):
     project_name: str = Field(default="DevDefender Lab", min_length=1, max_length=120)
     task_goal: str = Field(min_length=1, max_length=400)
+    current_task: str | None = Field(default=None, max_length=400)
     repo_path: str | None = Field(default=None, max_length=512)
     changed_files: list[str] = Field(default_factory=list, max_length=100)
+    completed_work: list[str] = Field(default_factory=list, max_length=50)
+    in_progress_work: list[str] = Field(default_factory=list, max_length=50)
+    blockers: list[str] = Field(default_factory=list, max_length=50)
+    next_steps: list[str] = Field(default_factory=list, max_length=50)
+    requirements: list[str] = Field(default_factory=list, max_length=50)
     tests: list[str] = Field(default_factory=list, max_length=100)
     artifacts: list[str] = Field(default_factory=list, max_length=100)
     docs: list[str] = Field(default_factory=list, max_length=100)
     architecture_facts: list[str] = Field(default_factory=list, max_length=50)
     experiment_facts: list[str] = Field(default_factory=list, max_length=50)
     risks: list[str] = Field(default_factory=list, max_length=50)
+    open_questions: list[str] = Field(default_factory=list, max_length=50)
     constraints: list[str] = Field(default_factory=list, max_length=50)
     evidence_pointers: list[str] = Field(default_factory=list, max_length=50)
 
     @field_validator(
         "changed_files",
+        "completed_work",
+        "in_progress_work",
+        "blockers",
+        "next_steps",
+        "requirements",
         "tests",
         "artifacts",
         "docs",
         "architecture_facts",
         "experiment_facts",
         "risks",
+        "open_questions",
         "constraints",
     )
     @classmethod
@@ -179,8 +192,8 @@ class MockBriefingAdapter:
     def build_report(self, context: BriefingContext | None = None) -> ProjectBriefingReport:
         context = context or default_briefing_context()
         pointers = context.evidence_pointers or [
-            "timeline://phase4d#event=0&kind=meeting_created",
-            "slide://phase4d#page=1",
+            "timeline://briefing#event=0&kind=briefing_generated",
+            "slide://briefing#page=1",
         ]
         primary_pointer = pointers[0]
         slide_pointer = next((pointer for pointer in pointers if pointer.startswith("slide://")), pointers[-1])
@@ -192,7 +205,8 @@ class MockBriefingAdapter:
             audience_summary=(
                 f"{context.project_name} is being packaged into a lightweight project briefing room. "
                 "The important product change is that the code agent explains project status in stakeholder "
-                "language while the local runtime handles meeting, deck, audio, interruption, replay, and evidence."
+                "language while the local runtime handles deck generation, feedback interpretation, plan updates, "
+                "and the execution gate."
             ),
             architecture_diagrams=[
                 BriefingDiagramRequest(
@@ -201,27 +215,27 @@ class MockBriefingAdapter:
                     kind="architecture",
                     audience_goal=(
                         "Show that the user-facing skill orchestrates the workflow, while the repo runtime owns "
-                        "repeatable deck, LiveKit, audio, interruption, and evidence operations."
+                        "repeatable deck, feedback-plan, plan-update, and execution-gate operations."
                     ),
                     mermaid_hint=(
                         "flowchart LR\n"
                         "  User[Stakeholder] --> Skill[project-briefing-room skill]\n"
                         "  Skill --> Adapter[Code-agent briefing adapter]\n"
                         "  Skill --> Runtime[DevDefender Lab runtime]\n"
-                        "  Runtime --> Deck[Slidev and Mermaid briefing]\n"
-                        "  Runtime --> LiveKit[AI-created LiveKit room]\n"
-                        "  Runtime --> Evidence[Replay and evidence packet]"
+                        "  Runtime --> Deck[Markdown and Mermaid briefing]\n"
+                        "  Runtime --> Feedback[Feedback plan]\n"
+                        "  Feedback --> Gate[Execution gate]"
                     ),
                     evidence_pointers=[primary_pointer, slide_pointer],
                 )
             ],
             progress_status=[
                 BriefingProgressItem(
-                    label="LiveKit meeting substrate",
+                    label="Codex-native briefing loop",
                     status="done",
                     plain_language_summary=(
-                        "The system can create a LiveKit room, publish generated presenter audio, and detect "
-                        "remote reviewer interruption without a human scheduling the meeting first."
+                        "The retained default path can generate a stakeholder deck, interpret feedback, update "
+                        "the plan, and decide whether Codex can continue."
                     ),
                     evidence_pointers=[primary_pointer],
                 ),
@@ -238,8 +252,8 @@ class MockBriefingAdapter:
                     label="Structured briefing contract",
                     status="in_progress",
                     plain_language_summary=(
-                        "The next layer is the provider-neutral report format that lets Codex, OpenClaude, Aider, "
-                        "or a mock adapter feed the same meeting runtime."
+                        "The next layer is the provider-neutral report format that lets Codex, Aider, or a generic "
+                        "agent feed the same local briefing runtime."
                     ),
                     evidence_pointers=[primary_pointer],
                 ),
@@ -247,10 +261,9 @@ class MockBriefingAdapter:
             requirements_coverage=[
                 BriefingRequirementCoverage(
                     requirement="Minimal manual setup",
-                    status="partial",
+                    status="met",
                     explanation=(
-                        "The default path avoids external meeting scheduling; real LiveKit mode still needs local "
-                        "LiveKit credentials."
+                        "The default path avoids external meeting scheduling, credentials, browser automation, and Node."
                     ),
                     evidence_pointers=[primary_pointer],
                 ),
@@ -275,17 +288,17 @@ class MockBriefingAdapter:
             ],
             experiment_results=[
                 BriefingExperimentResult(
-                    name="Phase 4B LiveKit TTS audio route",
+                    name="Codex-native feedback-to-plan route",
                     status="passed",
-                    summary="Generated presenter audio has been published into a LiveKit room as a browser audio track.",
-                    command="scripts/phase4_livekit_tts_smoke.py --managed-room",
+                    summary="Stakeholder feedback is converted into a structured feedback plan and applied back to plan.md.",
+                    command="scripts/project_briefing_room_smoke.py --agent-backend workspace --repo .",
                     evidence_pointers=[primary_pointer],
                 ),
                 BriefingExperimentResult(
-                    name="Phase 4C LiveKit interruption route",
+                    name="Execution gate route",
                     status="passed",
-                    summary="A remote reviewer audio track can trigger structured interruption events in the room.",
-                    command="scripts/phase4_livekit_interruption_smoke.py --managed-room",
+                    summary="The gate blocks continuation when clarification is pending and allows it when the plan is actionable.",
+                    command="scripts/briefing_execution_gate.py --plan-update artifacts/briefing_plan_update.json",
                     evidence_pointers=[primary_pointer],
                 ),
             ],
@@ -297,9 +310,9 @@ class MockBriefingAdapter:
                     decision_needed=False,
                 ),
                 BriefingRisk(
-                    risk="External meeting SaaS support can increase credential and UI-automation risk.",
-                    severity="medium",
-                    mitigation="Keep LiveKit as the default path and defer external SaaS adapters until required.",
+                    risk="A live meeting experience is no longer bundled in the minimal core.",
+                    severity="low",
+                    mitigation="Keep the current Codex-native product path small; add room providers later only if the product needs them.",
                     decision_needed=False,
                 ),
             ],
@@ -307,12 +320,12 @@ class MockBriefingAdapter:
                 BriefingQuestion(
                     question="Which code-agent adapter should be implemented first after the mock adapter?",
                     why_it_matters="The first real adapter defines the integration contract for other agents.",
-                    options=["Codex-native report", "OpenClaude CLI", "Aider"],
+                    options=["Codex-native report", "Aider", "Generic JSON input"],
                 )
             ],
             follow_up_tasks=[
                 BriefingFollowUpTask(
-                    task="Generate a Slidev/Mermaid briefing deck from ProjectBriefingReport.",
+                    task="Generate a Markdown/Mermaid briefing deck from ProjectBriefingReport.",
                     owner_hint="runtime",
                     priority="high",
                     evidence_pointers=[slide_pointer],
@@ -325,7 +338,7 @@ class MockBriefingAdapter:
                 ),
             ],
             evidence_pointers=[
-                BriefingEvidencePointer(pointer=primary_pointer, label="Primary meeting/evidence timeline pointer"),
+                BriefingEvidencePointer(pointer=primary_pointer, label="Primary briefing timeline pointer"),
                 BriefingEvidencePointer(pointer=slide_pointer, label="Primary slide/deck pointer"),
             ],
         )
@@ -334,21 +347,20 @@ class MockBriefingAdapter:
 def default_briefing_context() -> BriefingContext:
     return BriefingContext(
         project_name="DevDefender Lab",
-        task_goal="Package the LiveKit-backed defense room as a lightweight project briefing product for code agents.",
+        task_goal="Package a lightweight project briefing product for code agents.",
         changed_files=[
             "skills/project-briefing-room/SKILL.md",
-            "skills/project-briefing-room/dependencies.md",
-            "skills/project-briefing-room/agents/openai.yaml",
+            "skills/project-briefing-room/templates/agent_briefing_input.json",
         ],
         tests=["skill-creator quick_validate.py skills/project-briefing-room"],
         docs=["plan.md", "PHASE3_DESIGN.md", "PHASE3_HANDOFF.md", "DESIGN.md", "README.md"],
         architecture_facts=[
-            "The product skill remains thin and delegates deterministic meeting/deck/evidence work to the repo runtime.",
-            "LiveKit is the default AI-created meeting provider.",
+            "The product skill remains thin and delegates deterministic deck, feedback-plan, plan-update, and gate work to the repo runtime.",
+            "The default implementation is Codex-native and does not require a live meeting provider.",
         ],
         experiment_facts=[
-            "Phase 4B accepted generated TTS audio published into LiveKit.",
-            "Phase 4C accepted remote LiveKit reviewer interruption detection.",
+            "Project smoke accepts briefing artifacts, feedback plan, plan update, and execution gate.",
+            "Project doctor accepts a quick workspace closure without external credentials.",
         ],
         risks=[
             "Real code-agent adapters are not implemented yet.",
@@ -359,8 +371,8 @@ def default_briefing_context() -> BriefingContext:
             "Core product path should stay usable without optional helper skills.",
         ],
         evidence_pointers=[
-            "timeline://phase4d#event=0&kind=meeting_created",
-            "slide://phase4d#page=1",
+            "timeline://briefing#event=0&kind=briefing_generated",
+            "slide://briefing#page=1",
         ],
     )
 
@@ -399,10 +411,6 @@ def contains_forbidden_briefing_artifact_fields(payload: object) -> bool:
         "data:audio",
         ".wav",
         ".mp3",
-        "livekit_api_key",
-        "livekit api key",
-        "livekit_api_secret",
-        "livekit api secret",
         "api_secret=",
         "api_key=",
         "bearer ",

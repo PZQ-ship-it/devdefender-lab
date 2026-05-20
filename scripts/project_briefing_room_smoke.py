@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -12,10 +11,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT_DIR = ROOT / "artifacts"
 DEFAULT_OUT = ARTIFACT_DIR / "project_briefing_room_smoke.json"
-DEFAULT_TTS_OUT = ARTIFACT_DIR / "project_briefing_room_livekit_tts.json"
-DEFAULT_INTERRUPTION_OUT = ARTIFACT_DIR / "project_briefing_room_livekit_interruption.json"
-DEFAULT_EVIDENCE_OUT = ARTIFACT_DIR / "evidence_packet_project_briefing_room.json"
-DEFAULT_SECRET_OUT = ARTIFACT_DIR / "project_briefing_room_secret_scan.json"
+DEFAULT_FEEDBACK_PLAN_OUT = ARTIFACT_DIR / "briefing_feedback_plan.json"
+DEFAULT_FEEDBACK_PLAN_UPDATE_OUT = ARTIFACT_DIR / "briefing_plan_update.json"
+DEFAULT_FEEDBACK_EXECUTION_GATE_OUT = ARTIFACT_DIR / "briefing_execution_gate.json"
+DEFAULT_STAKEHOLDER_FEEDBACK = (
+    "The current briefing loop is too one-way. The AI should listen to stakeholder feedback, "
+    "ask clarifying questions, and update the execution plan before continuing."
+)
+DEFAULT_FEEDBACK_CLARIFICATIONS = [
+    "Pause after the direction, risk, and requirements coverage summary, then pause again before the final execution plan.",
+    (
+        "Block execution on direction or priority changes, requirement-satisfaction objections, safety or privacy concerns, "
+        "and evidence or test result disputes. Treat wording preferences, UI polish, and future integration ideas as "
+        "non-blocking suggestions unless the stakeholder explicitly marks them as blocking."
+    ),
+    (
+        "Write the interpreted execution plan back to the controlled Project Briefing Feedback Execution Plan block in "
+        "plan.md, and keep machine-readable state in artifacts/briefing_plan_update.json plus the source feedback plan "
+        "in artifacts/briefing_feedback_plan.json."
+    ),
+]
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -26,7 +41,7 @@ from devdefender_lab.briefing import (  # noqa: E402
     default_briefing_context,
 )
 from devdefender_lab.briefing_deck import write_briefing_deck  # noqa: E402
-from scripts.room_acceptance_smoke import managed_room_report, start_managed_room, stop_managed_room  # noqa: E402
+from devdefender_lab.briefing_workspace import WorkspaceBriefingAdapter  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -35,78 +50,64 @@ class Step:
     command: list[str]
     timeout: int
     report_path: Path
+    retries: int = 0
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run the Phase 4D Project Briefing Room product smoke.")
-    parser.add_argument("--room-url", default="http://127.0.0.1:8765", help="Running DevDefender room URL.")
-    parser.add_argument("--managed-room", action="store_true", help="Start and stop one local room for LiveKit gates.")
-    parser.add_argument("--repo", default="sample_repo", help="Repository path used when --managed-room starts a room.")
-    parser.add_argument("--slidev-port", type=int, default=3030, help="Slidev port used by --managed-room.")
-    parser.add_argument("--startup-timeout", type=float, default=45.0, help="Seconds to wait for managed room startup.")
-    parser.add_argument("--browser", help="Path to Edge/Chrome/Chromium. Defaults to child smoke auto-discovery.")
+    parser = argparse.ArgumentParser(description="Run the Project Briefing Room product smoke.")
+    parser.add_argument("--repo", default=".", help="Repository path used by the briefing adapter.")
     parser.add_argument(
         "--agent-backend",
-        choices=["mock"],
-        default="mock",
-        help="Briefing adapter backend. Phase 4D-4 supports only the deterministic mock backend.",
-    )
-    parser.add_argument(
-        "--skip-livekit-gates",
-        action="store_true",
-        help="Generate briefing artifacts without running LiveKit TTS/interruption child gates.",
-    )
-    parser.add_argument(
-        "--skip-livekit-room-create",
-        action="store_true",
-        help="Pass through to LiveKit child gates and rely on lazy room creation.",
-    )
-    parser.add_argument(
-        "--skip-closure-gates",
-        action="store_true",
-        help="Skip replay, evidence packet, and artifact secret scan after LiveKit child gates.",
-    )
-    parser.add_argument("--timeout", type=float, default=120.0, help="Process timeout for each LiveKit child gate.")
-    parser.add_argument("--tts-timeout", type=float, default=75.0, help="Child wait timeout for the LiveKit TTS gate.")
-    parser.add_argument(
-        "--interruption-timeout",
-        type=float,
-        default=90.0,
-        help="Child wait timeout for the LiveKit interruption gate.",
+        choices=["mock", "workspace"],
+        default="workspace",
+        help="Briefing adapter backend.",
     )
     parser.add_argument("--artifact-dir", type=Path, default=ARTIFACT_DIR, help="Directory for briefing artifacts.")
-    parser.add_argument("--tts-out", type=Path, default=DEFAULT_TTS_OUT, help="Path for the LiveKit TTS child report.")
     parser.add_argument(
-        "--interruption-out",
+        "--agent-input",
         type=Path,
-        default=DEFAULT_INTERRUPTION_OUT,
-        help="Path for the LiveKit interruption child report.",
+        help="Optional provider-neutral agent briefing input JSON.",
     )
-    parser.add_argument("--evidence-packet-out", type=Path, default=DEFAULT_EVIDENCE_OUT)
-    parser.add_argument("--secret-scan-out", type=Path, default=DEFAULT_SECRET_OUT)
+    parser.add_argument(
+        "--feedback",
+        default=DEFAULT_STAKEHOLDER_FEEDBACK,
+        help="Stakeholder feedback used to verify the feedback-to-plan loop.",
+    )
+    parser.add_argument("--feedback-file", type=Path, help="Path to stakeholder feedback text.")
+    parser.add_argument("--stt-text", help="Stakeholder feedback text produced by a speech-to-text step.")
+    parser.add_argument(
+        "--clarification",
+        action="append",
+        help="Clarification answer passed to the feedback plan generator. Repeat for multiple answers.",
+    )
+    parser.add_argument("--feedback-plan-out", type=Path, default=DEFAULT_FEEDBACK_PLAN_OUT)
+    parser.add_argument("--feedback-plan-update-out", type=Path)
+    parser.add_argument("--feedback-execution-gate-out", type=Path)
+    parser.add_argument("--skip-feedback-plan", action="store_true", help="Skip the feedback-to-plan gate.")
+    parser.add_argument("--timeout", type=float, default=120.0, help="Process timeout for each child step.")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="Path for the compact product smoke report.")
+    parser.add_argument(
+        "--skip-room-gates",
+        action="store_true",
+        help="Compatibility no-op. External room gates are no longer part of the default product smoke.",
+    )
     args = parser.parse_args()
 
     try:
         report = run_smoke(
-            room_url=args.room_url.rstrip("/"),
-            managed_room=args.managed_room,
             repo=args.repo,
-            slidev_port=args.slidev_port,
-            startup_timeout=args.startup_timeout,
-            browser=args.browser,
             agent_backend=args.agent_backend,
-            skip_livekit_gates=args.skip_livekit_gates,
-            skip_livekit_room_create=args.skip_livekit_room_create,
-            skip_closure_gates=args.skip_closure_gates,
-            timeout=args.timeout,
-            tts_timeout=args.tts_timeout,
-            interruption_timeout=args.interruption_timeout,
             artifact_dir=args.artifact_dir,
-            tts_out=args.tts_out,
-            interruption_out=args.interruption_out,
-            evidence_packet_out=args.evidence_packet_out,
-            secret_scan_out=args.secret_scan_out,
+            agent_input=args.agent_input,
+            feedback=args.feedback,
+            feedback_file=args.feedback_file,
+            stt_text=args.stt_text,
+            clarification_answers=args.clarification,
+            feedback_plan_out=args.feedback_plan_out,
+            feedback_plan_update_out=args.feedback_plan_update_out,
+            feedback_execution_gate_out=args.feedback_execution_gate_out,
+            skip_feedback_plan=args.skip_feedback_plan,
+            timeout=args.timeout,
             out=args.out,
         )
     except Exception as exc:
@@ -126,231 +127,213 @@ def main() -> int:
 
 def run_smoke(
     *,
-    room_url: str,
-    managed_room: bool = False,
-    repo: str = "sample_repo",
-    slidev_port: int = 3030,
-    startup_timeout: float = 45.0,
-    browser: str | None = None,
-    agent_backend: str = "mock",
-    skip_livekit_gates: bool = False,
-    skip_livekit_room_create: bool = False,
-    skip_closure_gates: bool = False,
-    timeout: float = 120.0,
-    tts_timeout: float = 75.0,
-    interruption_timeout: float = 90.0,
+    repo: str | Path = ".",
+    agent_backend: str = "workspace",
     artifact_dir: Path = ARTIFACT_DIR,
-    tts_out: Path = DEFAULT_TTS_OUT,
-    interruption_out: Path = DEFAULT_INTERRUPTION_OUT,
-    evidence_packet_out: Path = DEFAULT_EVIDENCE_OUT,
-    secret_scan_out: Path = DEFAULT_SECRET_OUT,
+    agent_input: Path | None = None,
+    feedback: str | None = DEFAULT_STAKEHOLDER_FEEDBACK,
+    feedback_file: Path | None = None,
+    stt_text: str | None = None,
+    clarification_answers: list[str] | None = None,
+    feedback_plan_out: Path | None = None,
+    feedback_plan_update_out: Path | None = None,
+    feedback_execution_gate_out: Path | None = None,
+    skip_feedback_plan: bool = False,
+    timeout: float = 120.0,
     out: Path = DEFAULT_OUT,
 ) -> dict[str, object]:
-    results = [build_briefing_artifacts(agent_backend=agent_backend, artifact_dir=artifact_dir)]
-    managed_room_payload: dict[str, object] | None = None
-    managed_room_state: dict[str, object] | None = None
-    shutdown: dict[str, object] | None = None
-    try:
-        if not skip_livekit_gates:
-            if managed_room:
-                managed_room_state = start_managed_room(
-                    room_url=room_url,
-                    repo=repo,
-                    slidev_port=slidev_port,
-                    startup_timeout=startup_timeout,
-                )
-            steps = build_livekit_steps(
-                room_url=room_url,
-                browser=browser,
-                timeout=timeout,
-                tts_timeout=tts_timeout,
-                interruption_timeout=interruption_timeout,
-                tts_out=tts_out,
-                interruption_out=interruption_out,
-                skip_livekit_room_create=skip_livekit_room_create,
-            )
-            results.extend(run_steps_until_failure(steps))
-            livekit_ok = all(_result_ok(results, name) for name in ["livekit_tts", "livekit_interruption"])
-            if livekit_ok and not skip_closure_gates:
-                closure_steps = build_closure_steps(
+    feedback_plan_output = feedback_plan_out or Path(artifact_dir) / "briefing_feedback_plan.json"
+    feedback_plan_update_output = feedback_plan_update_out or Path(artifact_dir) / "briefing_plan_update.json"
+    feedback_execution_gate_output = feedback_execution_gate_out or Path(artifact_dir) / "briefing_execution_gate.json"
+
+    results = [
+        build_briefing_artifacts(
+            agent_backend=agent_backend,
+            artifact_dir=artifact_dir,
+            repo=repo,
+            agent_input=agent_input,
+        )
+    ]
+    if not skip_feedback_plan:
+        answers = DEFAULT_FEEDBACK_CLARIFICATIONS if clarification_answers is None else clarification_answers
+        results.extend(
+            run_steps_until_failure(
+                build_feedback_plan_steps(
                     artifact_dir=artifact_dir,
                     timeout=timeout,
-                    evidence_packet_out=evidence_packet_out,
-                    secret_scan_out=secret_scan_out,
+                    feedback=feedback,
+                    feedback_file=feedback_file,
+                    stt_text=stt_text,
+                    clarification_answers=answers,
+                    feedback_plan_out=feedback_plan_output,
                 )
-                results.extend(run_steps_until_failure(closure_steps))
-    finally:
-        if managed_room_state:
-            shutdown = stop_managed_room(managed_room_state)
-            managed_room_payload = managed_room_report(managed_room_state, shutdown)
+            )
+        )
+        if _result_ok(results, "briefing_feedback_plan"):
+            results.extend(
+                run_steps_until_failure(
+                    build_feedback_execution_steps(
+                        timeout=timeout,
+                        feedback_plan_out=feedback_plan_output,
+                        feedback_plan_update_out=feedback_plan_update_output,
+                        feedback_execution_gate_out=feedback_execution_gate_output,
+                        plan_path=Path(repo) / "plan.md",
+                    )
+                )
+            )
 
     expected_steps = ["briefing_artifacts"]
-    if not skip_livekit_gates:
-        expected_steps.extend(["livekit_tts", "livekit_interruption"])
-        if not skip_closure_gates:
-            expected_steps.extend(["room_replay", "evidence_packet", "artifact_secret"])
+    if not skip_feedback_plan:
+        expected_steps.extend(
+            [
+                "briefing_feedback_plan",
+                "briefing_plan_update",
+                "briefing_execution_gate",
+            ]
+        )
     report = build_report(
         results,
         expected_steps,
-        managed_room=managed_room_payload,
-        skip_livekit_gates=skip_livekit_gates,
-        skip_closure_gates=skip_closure_gates,
+        feedback_plan_path=feedback_plan_output,
+        skip_feedback_plan=skip_feedback_plan,
     )
     report["report_path"] = str(out)
     report["child_report_paths"] = {
-        "briefing_deck": display_path(Path(artifact_dir) / "briefing_deck"),
-        "livekit_tts": display_path(tts_out),
-        "livekit_interruption": display_path(interruption_out),
-        "evidence_packet": display_path(evidence_packet_out),
-        "artifact_secret": display_path(secret_scan_out),
+        "briefing": display_path(Path(artifact_dir) / "briefing_deck" / "briefing_report.json"),
+        "feedback_plan": None if skip_feedback_plan else display_path(feedback_plan_output),
+        "plan_update": None if skip_feedback_plan else display_path(feedback_plan_update_output),
+        "execution_gate": None if skip_feedback_plan else display_path(feedback_execution_gate_output),
     }
     write_report(report, out)
     return report
 
 
-def build_briefing_artifacts(*, agent_backend: str = "mock", artifact_dir: Path = ARTIFACT_DIR) -> dict[str, object]:
-    if agent_backend != "mock":
-        return {
-            "name": "briefing_artifacts",
-            "ok": False,
-            "payload": {"ok": False, "agent_backend": agent_backend, "error": "unsupported briefing backend"},
-            "return_code": None,
-        }
-    adapter = MockBriefingAdapter()
-    report = adapter.build_report(default_briefing_context())
-    deck_artifact = write_briefing_deck(report, artifact_dir)
-    deck_dir = Path(artifact_dir) / "briefing_deck"
-    briefing_report_path = deck_dir / "briefing_report.json"
-    briefing_report_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+def build_briefing_artifacts(
+    *,
+    agent_backend: str = "workspace",
+    artifact_dir: Path,
+    repo: str | Path = ".",
+    agent_input: Path | None = None,
+) -> dict[str, object]:
+    artifact_path = Path(artifact_dir)
+    adapter = (
+        WorkspaceBriefingAdapter(repo_path=repo, agent_input_path=agent_input)
+        if agent_backend == "workspace"
+        else MockBriefingAdapter()
+    )
+    context = default_briefing_context() if agent_backend == "mock" else None
+    report = adapter.build_report(context) if context is not None else adapter.build_report()
+    deck = write_briefing_deck(report, artifact_path)
+    report_path = artifact_path / "briefing_deck" / "briefing_report.json"
+    report_path.write_text(json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     payload = {
         "ok": True,
         "agent_backend": agent_backend,
         "generated_by": report.generated_by,
-        "briefing_report_path": display_path(briefing_report_path),
-        "deck_path": display_path(deck_artifact.deck_path),
-        "script_path": display_path(deck_artifact.script_path),
-        "slide_count": deck_artifact.slide_count,
-        "diagram_count": deck_artifact.diagram_count,
+        "briefing_report_path": display_path(report_path),
+        "deck_path": display_path(deck.deck_path),
+        "script_path": display_path(deck.script_path),
+        "slide_count": deck.slide_count,
+        "diagram_count": deck.diagram_count,
         "checks": {
-            "briefing_report_written": briefing_report_path.exists(),
-            "deck_written": deck_artifact.deck_path is not None and deck_artifact.deck_path.exists(),
-            "presenter_script_written": deck_artifact.script_path is not None and deck_artifact.script_path.exists(),
-            "mermaid_present": "```mermaid" in deck_artifact.deck_markdown,
-            "summary_present": "## Stakeholder Summary" in deck_artifact.deck_markdown,
-            "progress_present": "## Progress" in deck_artifact.deck_markdown,
-            "requirements_present": "## Requirements Coverage" in deck_artifact.deck_markdown,
-            "experiments_present": "## Experiment Results" in deck_artifact.deck_markdown,
-            "risks_present": "## Risks and Decisions" in deck_artifact.deck_markdown,
-            "questions_present": "## Stakeholder Questions" in deck_artifact.deck_markdown,
-            "next_asks_present": "## Next Asks" in deck_artifact.deck_markdown,
-            "evidence_pointers_present": "## Evidence Pointers" in deck_artifact.deck_markdown,
-            "no_forbidden_artifact_fields": not contains_forbidden_briefing_artifact_fields(
-                {
-                    "briefing_report": report.model_dump(mode="json"),
-                    "deck_artifact": deck_artifact.model_dump(mode="json"),
-                }
-            ),
+            "briefing_report_written": report_path.exists(),
+            "deck_written": bool(deck.deck_path and deck.deck_path.exists()),
+            "presenter_script_written": bool(deck.script_path and deck.script_path.exists()),
+            "mermaid_present": "```mermaid" in deck.deck_markdown,
+            "summary_present": bool(report.audience_summary),
+            "progress_present": bool(report.progress_status),
+            "requirements_present": bool(report.requirements_coverage),
+            "experiments_present": bool(report.experiment_results),
+            "risks_present": bool(report.risks_and_unknowns),
+            "questions_present": bool(report.stakeholder_questions),
+            "next_asks_present": bool(report.follow_up_tasks),
+            "evidence_pointers_present": bool(report.evidence_pointers),
+            "no_forbidden_artifact_fields": not contains_forbidden_briefing_artifact_fields(report),
         },
     }
     return {
         "name": "briefing_artifacts",
         "ok": all(payload["checks"].values()),
-        "payload": payload,
         "return_code": 0,
+        "report_path": display_path(report_path),
+        "payload": payload,
     }
 
 
-def build_livekit_steps(
+def build_feedback_plan_steps(
     *,
-    room_url: str,
-    browser: str | None = None,
-    timeout: float = 120.0,
-    tts_timeout: float = 75.0,
-    interruption_timeout: float = 90.0,
-    tts_out: Path = DEFAULT_TTS_OUT,
-    interruption_out: Path = DEFAULT_INTERRUPTION_OUT,
-    skip_livekit_room_create: bool = False,
+    artifact_dir: Path,
+    timeout: float,
+    feedback: str | None,
+    feedback_file: Path | None,
+    stt_text: str | None,
+    clarification_answers: list[str],
+    feedback_plan_out: Path,
 ) -> list[Step]:
-    tts_command = [
+    command = [
         sys.executable,
-        str(ROOT / "scripts" / "phase4_livekit_tts_smoke.py"),
-        "--room-url",
-        room_url,
-        "--topic",
-        "Project Briefing Room TTS",
-        "--timeout",
-        str(tts_timeout),
+        str(ROOT / "scripts" / "briefing_feedback_plan.py"),
+        "--briefing-report",
+        str(Path(artifact_dir) / "briefing_deck" / "briefing_report.json"),
         "--out",
-        str(tts_out),
+        str(feedback_plan_out),
     ]
-    interruption_command = [
-        sys.executable,
-        str(ROOT / "scripts" / "phase4_livekit_interruption_smoke.py"),
-        "--room-url",
-        room_url,
-        "--topic",
-        "Project Briefing Room interruption",
-        "--timeout",
-        str(interruption_timeout),
-        "--out",
-        str(interruption_out),
-    ]
-    if browser:
-        tts_command.extend(["--browser", browser])
-        interruption_command.extend(["--browser", browser])
-    if skip_livekit_room_create:
-        tts_command.append("--skip-livekit-room-create")
-        interruption_command.append("--skip-livekit-room-create")
-    step_timeout = max(30, int(timeout))
+    if feedback:
+        command.extend(["--feedback", feedback])
+    if feedback_file:
+        command.extend(["--feedback-file", str(feedback_file)])
+    if stt_text:
+        command.extend(["--stt-text", stt_text])
+    if not feedback and not feedback_file and not stt_text:
+        command.append("--use-default-feedback")
+    for answer in clarification_answers:
+        command.extend(["--clarification", answer])
     return [
-        Step("livekit_tts", tts_command, timeout=step_timeout, report_path=tts_out),
-        Step("livekit_interruption", interruption_command, timeout=step_timeout, report_path=interruption_out),
+        Step(
+            name="briefing_feedback_plan",
+            command=command,
+            timeout=int(timeout),
+            report_path=_feedback_plan_step_report_path(feedback_plan_out),
+        )
     ]
 
 
-def build_closure_steps(
+def build_feedback_execution_steps(
     *,
-    artifact_dir: Path = ARTIFACT_DIR,
-    timeout: float = 120.0,
-    evidence_packet_out: Path = DEFAULT_EVIDENCE_OUT,
-    secret_scan_out: Path = DEFAULT_SECRET_OUT,
+    timeout: float,
+    feedback_plan_out: Path,
+    feedback_plan_update_out: Path,
+    feedback_execution_gate_out: Path,
+    plan_path: Path = Path("plan.md"),
 ) -> list[Step]:
-    step_timeout = max(30, int(timeout))
     return [
         Step(
-            "room_replay",
-            [
+            name="briefing_plan_update",
+            command=[
                 sys.executable,
-                str(ROOT / "scripts" / "room_replay_smoke.py"),
-                "--artifact-dir",
-                str(artifact_dir),
-            ],
-            timeout=step_timeout,
-            report_path=artifact_dir / "project_briefing_room_replay.stdout.json",
-        ),
-        Step(
-            "evidence_packet",
-            [
-                sys.executable,
-                str(ROOT / "scripts" / "evidence_packet_smoke.py"),
-                "--artifact-dir",
-                str(artifact_dir),
+                str(ROOT / "scripts" / "apply_briefing_feedback_plan.py"),
+                "--feedback-plan",
+                str(feedback_plan_out),
+                "--plan",
+                str(plan_path),
                 "--out",
-                str(evidence_packet_out),
+                str(feedback_plan_update_out),
             ],
-            timeout=step_timeout,
-            report_path=evidence_packet_out,
+            timeout=int(timeout),
+            report_path=feedback_plan_update_out,
         ),
         Step(
-            "artifact_secret",
-            [
+            name="briefing_execution_gate",
+            command=[
                 sys.executable,
-                str(ROOT / "scripts" / "artifact_secret_smoke.py"),
-                "--artifact-dir",
-                str(artifact_dir),
+                str(ROOT / "scripts" / "briefing_execution_gate.py"),
+                "--plan-update",
+                str(feedback_plan_update_out),
+                "--out",
+                str(feedback_execution_gate_out),
             ],
-            timeout=step_timeout,
-            report_path=secret_scan_out,
+            timeout=int(timeout),
+            report_path=feedback_execution_gate_out,
         ),
     ]
 
@@ -358,158 +341,209 @@ def build_closure_steps(
 def run_steps_until_failure(steps: list[Step]) -> list[dict[str, object]]:
     results: list[dict[str, object]] = []
     for step in steps:
-        result = run_step(step)
+        result = run_step_with_retries(step)
         results.append(result)
-        if not result["ok"]:
+        if not result.get("ok"):
             break
     return results
 
 
+def run_step_with_retries(step: Step) -> dict[str, object]:
+    attempts = max(1, step.retries + 1)
+    failures: list[dict[str, object]] = []
+    for attempt in range(1, attempts + 1):
+        result = run_step(step)
+        if result.get("ok"):
+            if attempt > 1:
+                result["attempt_count"] = attempt
+                result["previous_failures"] = summarize_retry_failures(failures)
+            return result
+        failures.append(result)
+    final = failures[-1] if failures else run_step(step)
+    final["attempt_count"] = attempts
+    if len(failures) > 1:
+        final["previous_failures"] = summarize_retry_failures(failures[:-1])
+    return final
+
+
 def run_step(step: Step) -> dict[str, object]:
+    before = _file_stat(step.report_path)
     try:
         process = subprocess.run(
             step.command,
             cwd=ROOT,
-            env=os.environ.copy(),
             capture_output=True,
             text=True,
             timeout=step.timeout,
             check=False,
         )
-        payload = load_json(step.report_path) if step.report_path.exists() else _parse_json_output(process.stdout)
-        if step.name in {"room_replay", "artifact_secret"} and payload:
-            write_report(payload, step.report_path)
-        return {
-            "name": step.name,
-            "ok": process.returncode == 0 and isinstance(payload, dict) and payload.get("ok") is True,
-            "return_code": process.returncode,
-            "report_path": display_path(step.report_path),
-            "payload": payload if isinstance(payload, dict) else {},
-            "stderr": _safe_stderr(process.stderr),
-        }
     except subprocess.TimeoutExpired as exc:
         return {
             "name": step.name,
             "ok": False,
             "return_code": None,
             "report_path": display_path(step.report_path),
+            "error": f"timeout after {step.timeout}s: {_safe_stderr(str(exc))}",
             "payload": {},
-            "stderr": _safe_error(exc),
         }
+
+    stdout_payload = _parse_json_output(process.stdout)
+    after = _file_stat(step.report_path)
+    file_payload = load_json(step.report_path) if step.report_path.exists() else {}
+    payload = stdout_payload if stdout_payload else file_payload
+    if stdout_payload and after == before:
+        step.report_path.parent.mkdir(parents=True, exist_ok=True)
+        step.report_path.write_text(json.dumps(stdout_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return {
+        "name": step.name,
+        "ok": process.returncode == 0 and bool(payload.get("ok", process.returncode == 0)),
+        "return_code": process.returncode,
+        "report_path": display_path(step.report_path),
+        "stderr": _safe_stderr(process.stderr),
+        "payload": payload,
+    }
 
 
 def build_report(
     results: list[dict[str, object]],
     expected_steps: list[str],
     *,
-    managed_room: dict[str, object] | None = None,
-    skip_livekit_gates: bool = False,
-    skip_closure_gates: bool = False,
+    feedback_plan_path: Path | None = None,
+    skip_feedback_plan: bool = False,
 ) -> dict[str, object]:
-    checks = {name: False for name in expected_steps}
-    for result in results:
-        name = str(result.get("name"))
-        if name in checks:
-            checks[name] = bool(result.get("ok"))
-    summarized_results = summarize_results(results)
+    checks = {step: _result_ok(results, step) for step in expected_steps}
     cross_checks = build_cross_checks(
         results,
-        summarized_results=summarized_results,
-        managed_room=managed_room,
-        skip_livekit_gates=skip_livekit_gates,
-        skip_closure_gates=skip_closure_gates,
+        feedback_plan_path=feedback_plan_path,
+        skip_feedback_plan=skip_feedback_plan,
     )
-    required_cross_checks = {key: value for key, value in cross_checks.items() if key.endswith("_ok")}
-    report: dict[str, object] = {
-        "ok": bool(checks) and all(checks.values()) and all(required_cross_checks.values()),
+    return {
+        "ok": all(checks.values()) and _cross_checks_pass(cross_checks),
+        "schema_version": "1",
+        "mode": "codex_native",
+        "external_room_gates": "skipped",
+        "skip_feedback_plan": skip_feedback_plan,
         "checks": checks,
         "cross_checks": cross_checks,
-        "results": summarized_results,
-        "skip_livekit_gates": skip_livekit_gates,
-        "skip_closure_gates": skip_closure_gates,
+        "results": summarize_results(results),
     }
-    if managed_room:
-        report["managed_room"] = managed_room
-    return report
 
 
 def build_cross_checks(
     results: list[dict[str, object]],
     *,
-    summarized_results: list[dict[str, object]] | None = None,
-    managed_room: dict[str, object] | None = None,
-    skip_livekit_gates: bool = False,
-    skip_closure_gates: bool = False,
+    feedback_plan_path: Path | None = None,
+    skip_feedback_plan: bool = False,
 ) -> dict[str, bool]:
     briefing = _payload_for(results, "briefing_artifacts")
-    briefing_checks = briefing.get("checks") if isinstance(briefing.get("checks"), dict) else {}
-    summary_payload: dict[str, object] = {
-        "results": summarized_results if summarized_results is not None else summarize_results(results),
-    }
-    if managed_room:
-        summary_payload["managed_room"] = managed_room
-    replay = _payload_for(results, "room_replay")
-    evidence = _payload_for(results, "evidence_packet")
-    secret = _payload_for(results, "artifact_secret")
-    evidence_kinds = _evidence_kinds(evidence)
+    briefing_checks = _dict(briefing.get("checks"))
+    feedback = _payload_for(results, "briefing_feedback_plan")
+    feedback_checks = _dict(feedback.get("checks"))
+    plan_update = _payload_for(results, "briefing_plan_update")
+    execution_gate = _payload_for(results, "briefing_execution_gate")
+    feedback_artifact = summarize_feedback_plan_artifact(feedback_plan_path)
     checks = {
-        "briefing_report_generated_ok": bool(briefing_checks.get("briefing_report_written")),
-        "briefing_deck_written_ok": bool(briefing_checks.get("deck_written")),
-        "presenter_script_written_ok": bool(briefing_checks.get("presenter_script_written")),
-        "briefing_deck_has_required_sections_ok": all(
-            bool(briefing_checks.get(key))
-            for key in [
-                "mermaid_present",
-                "summary_present",
-                "progress_present",
-                "requirements_present",
-                "experiments_present",
-                "risks_present",
-                "questions_present",
-                "next_asks_present",
-                "evidence_pointers_present",
-            ]
+        "briefing_deck_has_required_sections_ok": bool(
+            briefing_checks.get("summary_present")
+            and briefing_checks.get("progress_present")
+            and briefing_checks.get("requirements_present")
+            and briefing_checks.get("experiments_present")
+            and briefing_checks.get("risks_present")
+            and briefing_checks.get("questions_present")
+            and briefing_checks.get("next_asks_present")
         ),
-        "livekit_tts_ok": skip_livekit_gates or _result_ok(results, "livekit_tts"),
-        "livekit_interruption_ok": skip_livekit_gates or _result_ok(results, "livekit_interruption"),
-        "room_replay_ok": skip_livekit_gates or skip_closure_gates or _result_ok(results, "room_replay"),
-        "evidence_packet_ok": skip_livekit_gates or skip_closure_gates or _result_ok(results, "evidence_packet"),
-        "artifact_secret_ok": skip_livekit_gates or skip_closure_gates or _result_ok(results, "artifact_secret"),
-        "replay_evidence_thread_match_ok": skip_livekit_gates
-        or skip_closure_gates
-        or bool(replay.get("thread_id") and replay.get("thread_id") == evidence.get("thread_id")),
-        "evidence_packet_contains_project_events_ok": skip_livekit_gates
-        or skip_closure_gates
-        or _has_required_evidence_kinds(evidence_kinds),
-        "artifact_secret_findings_clean_ok": skip_livekit_gates
-        or skip_closure_gates
-        or (
-            secret.get("ok") is True
-            and isinstance(secret.get("findings"), list)
-            and len(secret.get("findings", [])) == 0
-        ),
-        "managed_room_shutdown_ok": managed_room is None or bool(
-            isinstance(managed_room.get("shutdown"), dict) and managed_room["shutdown"].get("ok") is True
-        ),
+        "briefing_deck_has_diagram_ok": bool(briefing_checks.get("mermaid_present")),
+        "briefing_artifacts_no_forbidden_fields_ok": bool(briefing_checks.get("no_forbidden_artifact_fields")),
+        "briefing_feedback_plan_ok": skip_feedback_plan or _result_ok(results, "briefing_feedback_plan"),
+        "briefing_plan_update_ok": skip_feedback_plan or _result_ok(results, "briefing_plan_update"),
+        "briefing_execution_gate_ok": skip_feedback_plan or _result_ok(results, "briefing_execution_gate"),
+        "briefing_execution_gate_can_continue_ok": skip_feedback_plan
+        or bool(execution_gate.get("can_continue") is True and execution_gate.get("source_of_truth") is True),
+        "feedback_plan_has_clarification_questions_ok": skip_feedback_plan
+        or bool(feedback_checks.get("has_clarification_questions")),
+        "feedback_plan_has_updated_execution_plan_ok": skip_feedback_plan
+        or bool(feedback_checks.get("has_updated_execution_plan")),
+        "feedback_plan_has_plan_changes_ok": skip_feedback_plan or bool(feedback_checks.get("has_plan_changes")),
+        "feedback_plan_artifact_present_ok": skip_feedback_plan or bool(feedback_artifact.get("present")),
+        "feedback_plan_artifact_has_concerns_ok": skip_feedback_plan
+        or bool(feedback_artifact.get("has_interpreted_concerns")),
+        "feedback_plan_artifact_has_clarification_questions_ok": skip_feedback_plan
+        or bool(feedback_artifact.get("has_clarification_questions")),
+        "feedback_plan_artifact_has_plan_changes_ok": skip_feedback_plan
+        or bool(feedback_artifact.get("has_plan_changes")),
+        "feedback_plan_artifact_has_actionable_next_steps_ok": skip_feedback_plan
+        or bool(feedback_artifact.get("has_actionable_next_steps")),
+        "feedback_plan_artifact_no_forbidden_fields_ok": skip_feedback_plan
+        or bool(feedback_artifact.get("no_forbidden_artifact_fields")),
         "no_forbidden_artifact_fields_ok": bool(briefing_checks.get("no_forbidden_artifact_fields"))
-        and not contains_forbidden_briefing_artifact_fields(summary_payload),
+        and (skip_feedback_plan or not contains_forbidden_briefing_artifact_fields(feedback))
+        and (skip_feedback_plan or not contains_forbidden_briefing_artifact_fields(plan_update))
+        and (skip_feedback_plan or not contains_forbidden_briefing_artifact_fields(execution_gate))
+        and (skip_feedback_plan or bool(feedback_artifact.get("no_forbidden_artifact_fields"))),
+        "external_room_gates_skipped": True,
+        "advanced_audit_included": False,
     }
-    checks["livekit_gates_skipped"] = skip_livekit_gates
-    checks["closure_gates_skipped"] = skip_livekit_gates or skip_closure_gates
     return checks
 
 
+def _cross_checks_pass(checks: dict[str, bool]) -> bool:
+    return all(value for key, value in checks.items() if key.endswith("_ok") or key.endswith("_skipped"))
+
+
 def summarize_results(results: list[dict[str, object]]) -> list[dict[str, object]]:
-    return [
-        {
+    summarized: list[dict[str, object]] = []
+    for result in results:
+        item = {
             "name": result.get("name"),
             "ok": bool(result.get("ok")),
             "return_code": result.get("return_code"),
             "report_path": result.get("report_path"),
             "payload": summarize_payload(result.get("payload")),
         }
-        for result in results
-    ]
+        if result.get("attempt_count") is not None:
+            item["attempt_count"] = result.get("attempt_count")
+        if result.get("previous_failures") is not None:
+            item["previous_failures"] = result.get("previous_failures")
+        summarized.append(item)
+    return summarized
+
+
+def summarize_feedback_plan_artifact(path: Path | None) -> dict[str, object]:
+    if path is None:
+        return {
+            "present": False,
+            "has_interpreted_concerns": False,
+            "has_clarification_questions": False,
+            "has_plan_changes": False,
+            "has_actionable_next_steps": False,
+            "no_forbidden_artifact_fields": False,
+        }
+    payload = load_json(Path(path))
+    updated_plan = payload.get("updated_execution_plan") if isinstance(payload.get("updated_execution_plan"), dict) else {}
+    next_steps = updated_plan.get("next_steps") if isinstance(updated_plan, dict) else []
+    summary = {
+        "present": Path(path).exists() and bool(payload),
+        "has_interpreted_concerns": bool(payload.get("interpreted_concerns")),
+        "has_clarification_questions": bool(payload.get("clarification_questions")),
+        "has_plan_changes": bool(payload.get("plan_changes")),
+        "has_actionable_next_steps": isinstance(next_steps, list) and any(str(step).strip() for step in next_steps),
+        "no_forbidden_artifact_fields": bool(payload) and not contains_forbidden_briefing_artifact_fields(payload),
+    }
+    if payload.get("needs_follow_up") is not None:
+        summary["needs_follow_up"] = bool(payload.get("needs_follow_up"))
+    return summary
+
+
+def summarize_retry_failures(results: list[dict[str, object]]) -> list[dict[str, object]]:
+    failures: list[dict[str, object]] = []
+    for result in results:
+        failures.append(
+            {
+                "return_code": result.get("return_code"),
+                "report_path": result.get("report_path"),
+            }
+        )
+    return failures
 
 
 def summarize_payload(payload: object) -> dict[str, object]:
@@ -524,50 +558,25 @@ def summarize_payload(payload: object) -> dict[str, object]:
         "script_path",
         "slide_count",
         "diagram_count",
+        "feedback_summary",
+        "needs_follow_up",
+        "concern_count",
+        "clarification_question_count",
+        "plan_change_count",
+        "updated_next_step_count",
+        "evidence_pointer_count",
+        "ready_for_execution",
+        "execution_source_of_truth",
+        "pending_question_count",
+        "answered_question_count",
+        "can_continue",
+        "source_of_truth",
+        "blocking_reason",
+        "next_steps",
+        "pending_questions",
         "checks",
-        "new_event_count",
-        "new_event_kinds",
-        "livekit_tts_event_count",
-        "mapped_slide_count",
-        "baseline_event_count",
-        "browser_return_code",
-        "thread_id",
-        "thread_id_source",
-        "slide_event_count",
-        "timeline_event_count",
-        "evidence_count",
-        "kinds",
-        "scanned_file_count",
-        "loaded_secret_count",
-        "findings",
     ]
     return {key: payload[key] for key in keep_keys if key in payload}
-
-
-def _payload_for(results: list[dict[str, object]], name: str) -> dict[str, object]:
-    for result in results:
-        if result.get("name") == name and isinstance(result.get("payload"), dict):
-            return result["payload"]  # type: ignore[return-value]
-    return {}
-
-
-def _result_ok(results: list[dict[str, object]], name: str) -> bool:
-    return any(result.get("name") == name and result.get("ok") is True for result in results)
-
-
-def _evidence_kinds(evidence_payload: dict[str, object]) -> set[str]:
-    kinds = evidence_payload.get("kinds")
-    if isinstance(kinds, list):
-        return {str(kind) for kind in kinds}
-    evidence = evidence_payload.get("evidence")
-    if isinstance(evidence, list):
-        return {str(item.get("kind")) for item in evidence if isinstance(item, dict)}
-    return set()
-
-
-def _has_required_evidence_kinds(kinds: set[str]) -> bool:
-    required = {"meeting_created", "livekit_connected", "tts_audio_track_published", "speech_interrupted"}
-    return required.issubset(kinds)
 
 
 def write_report(report: dict[str, object], out: Path) -> None:
@@ -593,6 +602,18 @@ def load_json(path: Path) -> dict[str, object]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _feedback_plan_step_report_path(feedback_plan_out: Path) -> Path:
+    return Path(feedback_plan_out).with_name(f"{Path(feedback_plan_out).stem}.smoke.json")
+
+
+def _file_stat(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
 def _parse_json_output(output: str) -> dict[str, object]:
     text = output.strip()
     if not text:
@@ -609,6 +630,21 @@ def _parse_json_output(output: str) -> dict[str, object]:
         except json.JSONDecodeError:
             return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _payload_for(results: list[dict[str, object]], name: str) -> dict[str, object]:
+    for result in results:
+        if result.get("name") == name and isinstance(result.get("payload"), dict):
+            return result["payload"]  # type: ignore[return-value]
+    return {}
+
+
+def _result_ok(results: list[dict[str, object]], name: str) -> bool:
+    return any(result.get("name") == name and result.get("ok") is True for result in results)
+
+
+def _dict(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
 
 
 def _safe_stderr(value: str) -> str:
