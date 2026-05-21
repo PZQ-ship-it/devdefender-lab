@@ -1,4 +1,4 @@
-"""DevDefender Phase 1 integration lab."""
+"""Lightweight Project Briefing Room workflow for code agents."""
 
 __all__ = ["__version__"]
 

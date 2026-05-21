@@ -1,3 +1,23 @@
+## Current Product Scope
+
+DevDefender Lab is currently scoped to the lightweight Project Briefing Room product for VS Code Codex and similar code agents.
+
+Current default path:
+
+- Generate a stakeholder-readable briefing from repo-visible workspace facts.
+- Let Codex present the briefing, listen to stakeholder feedback, ask follow-up questions, and decide how that feedback changes direction, requirements, risk, evidence, priority, or acceptance.
+- Use scripts only for deterministic persistence and checks: write bounded artifacts, update the controlled plan block, and evaluate the execution gate.
+- Continue implementation in the same Codex session only when `artifacts/project_briefing_room/session.json` and the execution gate indicate the updated plan is actionable.
+
+Default package boundaries:
+
+- Included: `project-briefing-room`, `project-briefing-room-doctor`, `project-briefing-agent-input`, repo-local artifacts under `artifacts/project_briefing_room/`, and the repo-versioned `$project-briefing-room` skill.
+- Not included by default: live meeting rooms, speech or video capture, Zoom, LiveKit, WebRTC, Node/Slidev runtime, OpenAI credentials, external SaaS scheduling, or automated code-agent handoff chains.
+
+Release checks are tracked in `RELEASE_CHECKLIST.md`.
+
+---
+
 初始改造前 code agent 可以使用 [Gitlawb/openclaude](https://github.com/Gitlawb/openclaude)，但它不能直接成为系统里的“自由行动者”。
 
 正确姿势是：把 Code Agent 当成一个可替换的执行后端，通过统一的 Agent Adapter 接入黑板状态机。LangGraph 只给它结构化 Issue、代码版本指针、允许修改范围、测试命令和验收规则；Code Agent 只能返回 patch、测试日志、commit 指针和风险说明，不能绕过 TDAD 流程直接改主分支。
@@ -1503,7 +1523,7 @@ Next likely iteration:
 <!-- DEVDEFENDER_BRIEFING_FEEDBACK_PLAN:START -->
 ## Project Briefing Feedback Execution Plan
 
-- Source: `C:/Users/Administrator/AppData/Local/Temp/pytest-of-Administrator/pytest-347/test_project_briefing_room_emp0/briefing_feedback_plan.json`
+- Source: `C:/Users/Administrator/AppData/Local/Temp/pytest-of-Administrator/pytest-360/test_project_briefing_room_emp0/briefing_feedback_plan.json`
 - Project: DevDefender Lab
 - Status: `needs_clarification`
 - Follow-up required: `true`

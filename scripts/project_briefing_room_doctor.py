@@ -23,6 +23,11 @@ REQUIRED_SCRIPT_NAMES = [
     "briefing_execution_gate.py",
     "answer_briefing_clarification.py",
 ]
+REQUIRED_ENTRY_POINTS = [
+    "project-briefing-room",
+    "project-briefing-room-doctor",
+    "project-briefing-agent-input",
+]
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -67,9 +72,13 @@ def build_doctor_report(
 ) -> dict[str, object]:
     codex = codex_home or _default_codex_home()
     source_skill = ROOT / "skills" / "project-briefing-room" / "SKILL.md"
+    bootstrap_runtime = ROOT / "skills" / "project-briefing-room" / "bootstrap_runtime.ps1"
     installed_skill = codex / "skills" / "project-briefing-room" / "SKILL.md"
     required_scripts = [ROOT / "scripts" / name for name in REQUIRED_SCRIPT_NAMES]
     skill_text = _read_text(source_skill)
+    readme_text = _read_text(ROOT / "README.md")
+    pyproject_text = _read_text(ROOT / "pyproject.toml")
+    release_checklist = ROOT / "RELEASE_CHECKLIST.md"
     quick_smoke = (
         {"ok": True, "skipped": True, "checks": {"quick_smoke_skipped": True}}
         if skip_quick_smoke
@@ -79,7 +88,12 @@ def build_doctor_report(
     checks = {
         "source_skill_present": source_skill.exists(),
         "source_skill_has_product_invocation": DEFAULT_INVOCATION in skill_text,
+        "bootstrap_runtime_present": bootstrap_runtime.exists(),
+        "bootstrap_runtime_trusted_repo": "https://github.com/PZQ-ship-it/devdefender-lab.git" in _read_text(bootstrap_runtime),
         "required_scripts_present": all(path.exists() for path in required_scripts),
+        "cli_entry_points_present": all(name in pyproject_text for name in REQUIRED_ENTRY_POINTS),
+        "release_checklist_present": release_checklist.exists(),
+        "readme_has_release_scope": "## Release Scope" in readme_text,
         "installed_skill_present": installed_skill.exists(),
         "quick_smoke_ok": bool(quick_smoke.get("ok")),
         "quick_smoke_no_external_room_required": bool(
@@ -107,8 +121,11 @@ def build_doctor_report(
         "ok": all(checks.values()),
         "invocation": DEFAULT_INVOCATION,
         "source_skill": _display_path(source_skill),
+        "bootstrap_runtime": _display_path(bootstrap_runtime),
         "installed_skill": str(installed_skill),
         "required_scripts": [_display_path(path) for path in required_scripts],
+        "required_entry_points": REQUIRED_ENTRY_POINTS,
+        "release_checklist": _display_path(release_checklist),
         "quick_smoke": quick_smoke,
         "checks": checks,
     }

@@ -173,53 +173,76 @@ def render_session_markdown(
     project_name = str(briefing.get("project_name") or feedback_plan.get("project_name") or "Project Briefing Room")
     can_continue = execution_gate.get("can_continue") is True
     status = "ready_to_continue" if can_continue else "needs_clarification"
+    updated_plan = feedback_plan.get("updated_execution_plan") if isinstance(feedback_plan.get("updated_execution_plan"), dict) else {}
+    gate_steps = _string_list(execution_gate.get("next_steps"))
+    plan_steps = _string_list(updated_plan.get("next_steps")) if isinstance(updated_plan, dict) else []
+    feedback_summary = _fallback_text(feedback_plan.get("feedback_summary"), "No stakeholder feedback was captured.")
     lines = [
-        f"# {project_name} Briefing Session",
+        f"# {project_name} Stakeholder Briefing",
         "",
-        f"- Status: `{status}`",
-        f"- Can continue: `{str(can_continue).lower()}`",
-        f"- Source of truth: `{str(execution_gate.get('source_of_truth') is True).lower()}`",
-        f"- Smoke ok: `{str(smoke_report.get('ok') is True).lower()}`",
+        "## Executive Summary",
         "",
-        "## Stakeholder Summary",
+        f"- **Current decision state**: `{status}`.",
+        f"- **Project direction**: {_fallback_text(briefing.get('task_goal'), 'Brief the current project status and update the execution plan from stakeholder feedback.')}",
+        f"- **Plain-language conclusion**: {_fallback_text(briefing.get('audience_summary'), 'The briefing was generated from repo-visible project facts.')}",
+        f"- **Stakeholder signal**: {feedback_summary}",
+        f"- **Execution gate**: {_gate_sentence(can_continue, execution_gate)}",
         "",
-        _fallback_text(briefing.get("audience_summary"), "No briefing summary was generated."),
+        "## Project Snapshot",
         "",
-        "## Architecture",
+        "- **What this product does**: It lets a code agent brief a stakeholder on current project status, listen to feedback, ask clarifying questions, and produce the next execution plan.",
+        f"- **What was inspected**: {_source_summary(briefing, smoke_report)}",
+        f"- **What happens next**: {_fallback_text((gate_steps or plan_steps or ['No next step recorded.'])[0], 'No next step recorded.')}",
+        "",
+        "## Architecture In Plain Language",
         "",
     ]
     lines.extend(_diagram_lines(briefing))
-    lines.extend(["", "## Progress", ""])
-    lines.extend(_model_list_lines(briefing.get("progress_status"), "label", "plain_language_summary"))
-    lines.extend(["", "## Requirements Coverage", ""])
-    lines.extend(_model_list_lines(briefing.get("requirements_coverage"), "requirement", "explanation", status_key="status"))
-    lines.extend(["", "## Experiment Results", ""])
-    lines.extend(_model_list_lines(briefing.get("experiment_results"), "name", "summary", status_key="status"))
-    lines.extend(["", "## Risks And Decisions", ""])
-    lines.extend(_model_list_lines(briefing.get("risks_and_unknowns"), "risk", "mitigation", status_key="severity"))
-    lines.extend(["", "## Stakeholder Feedback", ""])
-    lines.append(_fallback_text(feedback_plan.get("feedback_summary"), "No feedback summary was generated."))
-    lines.extend(["", "### Interpreted Concerns", ""])
-    lines.extend(_model_list_lines(feedback_plan.get("interpreted_concerns"), "concern", "category", status_key="priority"))
+    lines.extend(["", "## Progress For Stakeholders", ""])
+    lines.extend(_model_list_lines(_public_items(briefing.get("progress_status")), "label", "plain_language_summary", max_items=6))
+    lines.extend(["", "## Requirement Fit", ""])
+    lines.extend(_model_list_lines(_dedupe_items(briefing.get("requirements_coverage"), "requirement"), "requirement", "explanation", status_key="status", max_items=6))
+    lines.extend(["", "## Validation Snapshot", ""])
+    lines.extend(_validation_snapshot(smoke_report, briefing, execution_gate))
+    lines.extend(["", "## Risks And Decisions Needed", ""])
+    lines.extend(_model_list_lines(briefing.get("risks_and_unknowns"), "risk", "mitigation", status_key="severity", max_items=6))
+    lines.extend(["", "## Feedback Listening Checkpoint", ""])
+    lines.append("Pause for stakeholder confirmation before treating this plan as final.")
+    lines.append("")
+    lines.append(feedback_summary)
+    lines.extend(["", "### Interpreted Stakeholder Concerns", ""])
+    lines.extend(_model_list_lines(feedback_plan.get("interpreted_concerns"), "concern", "category", status_key="priority", max_items=5))
     lines.extend(["", "### Clarification Questions", ""])
     questions = _clarification_lines(feedback_plan)
     lines.extend(questions if questions else ["- No clarification questions recorded."])
     lines.extend(["", "## Updated Execution Plan", ""])
-    updated_plan = feedback_plan.get("updated_execution_plan") if isinstance(feedback_plan.get("updated_execution_plan"), dict) else {}
     lines.append(_fallback_text(updated_plan.get("summary"), "No updated plan summary was generated."))
     lines.extend(["", "### Next Steps", ""])
-    gate_steps = _string_list(execution_gate.get("next_steps"))
-    plan_steps = _string_list(updated_plan.get("next_steps")) if isinstance(updated_plan, dict) else []
     lines.extend(_numbered_lines(gate_steps or plan_steps))
     lines.extend(["", "### Acceptance Criteria", ""])
     lines.extend(_bullet_lines(_string_list(updated_plan.get("acceptance_criteria")) if isinstance(updated_plan, dict) else []))
-    lines.extend(["", "## Execution Gate", ""])
+    lines.extend(["", "## Continue Or Stop", ""])
     if can_continue:
         lines.append("- Ready: continue in the same Codex session from this updated plan.")
     else:
         reason = str(execution_gate.get("blocking_reason") or "Pending clarification is required before execution continues.")
         lines.append(f"- Blocked: {reason}")
-    lines.extend(["", "## Artifacts", ""])
+    pending_questions = _pending_questions(feedback_plan, execution_gate)
+    if pending_questions:
+        lines.extend(["", "Pending stakeholder answers:"])
+        lines.extend(_numbered_lines(pending_questions))
+    lines.extend(["", "## Technical Appendix", ""])
+    lines.extend(
+        [
+            f"- Status: `{status}`",
+            f"- Can continue: `{str(can_continue).lower()}`",
+            f"- Source of truth: `{str(execution_gate.get('source_of_truth') is True).lower()}`",
+            f"- Smoke ok: `{str(smoke_report.get('ok') is True).lower()}`",
+        ]
+    )
+    lines.extend(["", "### Detailed Validation", ""])
+    lines.extend(_model_list_lines(briefing.get("experiment_results"), "name", "summary", status_key="status", max_items=8))
+    lines.extend(["", "### Artifacts", ""])
     for name, path in paths.items():
         if path is not None:
             lines.append(f"- `{name}`: `{_display_path(path)}`")
@@ -281,11 +304,12 @@ def _model_list_lines(
     body_key: str,
     *,
     status_key: str | None = None,
+    max_items: int = 8,
 ) -> list[str]:
     if not isinstance(value, list) or not value:
         return ["- None recorded."]
     lines: list[str] = []
-    for item in value[:8]:
+    for item in value[:max_items]:
         if not isinstance(item, dict):
             continue
         title = _fallback_text(item.get(title_key), "Untitled")
@@ -293,6 +317,91 @@ def _model_list_lines(
         status = f" `{item.get(status_key)}`" if status_key and item.get(status_key) else ""
         lines.append(f"-{status} **{title}**: {body}" if body else f"-{status} **{title}**")
     return lines or ["- None recorded."]
+
+
+def _public_items(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    items: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        text = " ".join(str(item.get(key, "")) for key in ("label", "plain_language_summary", "name", "summary"))
+        if _is_technical_noise(text):
+            continue
+        items.append(item)
+    return items
+
+
+def _dedupe_items(value: object, key: str) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    seen: set[str] = set()
+    items: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        marker = str(item.get(key, "")).strip().casefold().rstrip(".")
+        if not marker or marker in seen:
+            continue
+        seen.add(marker)
+        items.append(item)
+    return items
+
+
+def _validation_snapshot(
+    smoke_report: dict[str, object],
+    briefing: dict[str, object],
+    execution_gate: dict[str, object],
+) -> list[str]:
+    lines = []
+    if smoke_report.get("ok") is True:
+        lines.append("- **Local product gate**: passed.")
+    else:
+        lines.append("- **Local product gate**: not confirmed.")
+    if execution_gate.get("source_of_truth") is True:
+        lines.append("- **Execution plan state**: accepted as the current source of truth.")
+    elif execution_gate.get("can_continue") is True:
+        lines.append("- **Execution plan state**: ready to continue, but source-of-truth status is not confirmed.")
+    else:
+        lines.append("- **Execution plan state**: waiting for stakeholder clarification before continuing.")
+    public_results = _public_items(briefing.get("experiment_results"))
+    if public_results:
+        first = public_results[0]
+        lines.append(
+            f"- **Most relevant check**: {_fallback_text(first.get('summary'), _fallback_text(first.get('name'), 'No validation detail recorded.'))}"
+        )
+    return lines
+
+
+def _source_summary(briefing: dict[str, object], smoke_report: dict[str, object]) -> str:
+    generated_by = _fallback_text(briefing.get("generated_by"), "workspace briefing adapter")
+    child_paths = smoke_report.get("child_report_paths")
+    artifact_count = len(child_paths) if isinstance(child_paths, dict) else 0
+    return f"{generated_by}; {artifact_count} generated artifact group(s)."
+
+
+def _gate_sentence(can_continue: bool, execution_gate: dict[str, object]) -> str:
+    if can_continue:
+        return "Ready to continue from the updated plan after stakeholder confirmation."
+    reason = str(execution_gate.get("blocking_reason") or "Stakeholder clarification is still required.")
+    return f"Stop before implementation. {reason}"
+
+
+def _is_technical_noise(value: str) -> bool:
+    lowered = value.casefold()
+    return any(
+        marker in lowered
+        for marker in (
+            "artifacts/",
+            ".json",
+            "pytest",
+            "changed file",
+            "dirty worktree",
+            "workspace has pending edits",
+            "smoke",
+        )
+    )
 
 
 def _clarification_lines(feedback_plan: dict[str, object]) -> list[str]:

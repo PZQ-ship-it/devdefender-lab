@@ -14,6 +14,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.2"]
 
+[project.scripts]
+project-briefing-room = "devdefender_lab.cli:project_briefing_room"
+project-briefing-room-doctor = "devdefender_lab.cli:project_briefing_room_doctor"
+project-briefing-agent-input = "devdefender_lab.cli:project_briefing_agent_input"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
